@@ -87,6 +87,59 @@ time for the whole batch derived from measured throughput, detection of duplicat
 downloads (`File.mp4` alongside `File (1).mp4`), a Windows notification on
 completion, and an optional shutdown afterwards.
 
+## What survives the conversion
+
+Verified by round-tripping test files through the actual conversion command and
+inspecting the result.
+
+| | Result |
+|---|---|
+| HDR10 — bit depth, primaries, transfer, matrix | Preserved |
+| Frame rates up to 144 fps, and 4K | Preserved exactly |
+| Multiple audio tracks — AC-3, E-AC-3, DTS, FLAC, AAC | Preserved, all channels |
+| SubRip subtitles | Preserved, including basic styling |
+| ASS/SSA subtitles | Text, colour, size and weight preserved |
+| Chapter marks and stream language tags | Preserved |
+
+## Limitations
+
+These are the cases where something is lost or the file will not convert. They
+follow from the MP4 container and from what NVENC can do, not from oversight.
+
+**Lossless Blu-ray audio does not fit in MP4.** TrueHD — the carrier for Dolby
+Atmos on disc — and DTS-HD Master Audio have no MP4 representation, and a remux
+containing one will fail to convert rather than lose it silently. Web releases
+are unaffected: they carry Atmos inside E-AC-3, which MP4 handles.
+
+**Dolby Vision is reduced to HDR10.** Its dynamic per-scene metadata cannot be
+carried through NVENC. The HDR10 base layer survives, so the picture stays HDR,
+but the Dolby Vision layer is gone.
+
+**ASS subtitle positioning is lost.** Converting to `mov_text` keeps the text and
+its basic appearance but drops absolute positioning and karaoke timing. Typeset
+signs in fansubs will appear as plain subtitle lines.
+
+**Bitmap subtitles are dropped.** PGS and VobSub are images, not text, and MP4
+cannot store them. They are skipped so the encode still succeeds.
+
+**Sources with 4:4:4 chroma fail.** NVENC's AV1 encoder does not accept them and
+reports `No capable devices found`, which reads like a hardware fault but is not.
+Ordinary releases are 4:2:0 and unaffected.
+
+**Encoding is NVIDIA-only** — see the table below.
+
+## Planned
+
+Nothing here is implemented yet; the list is what would be worth doing next,
+roughly in that order.
+
+| | Why |
+|---|---|
+| H.265 (HEVC) | For players and TVs that predate AV1 |
+| MKV as an output container | Removes the lossless-audio and bitmap-subtitle limitations above |
+| Software encoding (SVT-AV1) | Makes the application usable without a suitable GPU |
+| AMD (AMF) and Intel (Quick Sync) | Hardware encoding for the remaining vendors |
+
 ## Requirements
 
 - Windows 10 or 11
