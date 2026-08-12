@@ -103,17 +103,22 @@ inspecting the result.
 
 ## Limitations
 
-These are the cases where something is lost or the file will not convert. They
-follow from the MP4 container and from what NVENC can do, not from oversight.
+These are the cases where something is lost or the file will not convert, and
+what causes each one — the MP4 container, the limits of NVENC, or a decision
+made here.
 
-**Lossless Blu-ray audio does not fit in MP4.** TrueHD — the carrier for Dolby
-Atmos on disc — and DTS-HD Master Audio have no MP4 representation, and a remux
-containing one will fail to convert rather than lose it silently. Web releases
-are unaffected: they carry Atmos inside E-AC-3, which MP4 handles.
+**Sources with TrueHD audio fail to convert.** TrueHD — the carrier for Dolby
+Atmos on Blu-ray — can be placed in MP4, but FFmpeg classes that combination as
+experimental and refuses it unless `-strict -2` is passed, which Amboss does not
+do. The result is a failed file rather than a silent loss: the output is
+discarded and the source is left alone. Web releases are unaffected, since they
+carry Atmos inside E-AC-3, which MP4 handles normally.
 
-**Dolby Vision is reduced to HDR10.** Its dynamic per-scene metadata cannot be
-carried through NVENC. The HDR10 base layer survives, so the picture stays HDR,
-but the Dolby Vision layer is gone.
+**Dolby Vision metadata is expected to be lost.** NVENC does not carry it
+through a re-encode. Where a source also has an HDR10 base layer, that base
+should survive and the picture stay HDR; a source without one is unlikely to
+come out looking right. This is the one entry here that could not be tested —
+see below.
 
 **ASS subtitle positioning is lost.** Converting to `mov_text` keeps the text and
 its basic appearance but drops absolute positioning and karaoke timing. Typeset
@@ -122,11 +127,25 @@ signs in fansubs will appear as plain subtitle lines.
 **Bitmap subtitles are dropped.** PGS and VobSub are images, not text, and MP4
 cannot store them. They are skipped so the encode still succeeds.
 
-**Sources with 4:4:4 chroma fail.** NVENC's AV1 encoder does not accept them and
-reports `No capable devices found`, which reads like a hardware fault but is not.
-Ordinary releases are 4:2:0 and unaffected.
+**Sources with 4:4:4 chroma fail.** NVENC's AV1 encoder does not accept them. It
+reports `No capable devices found`, a generic message that reads like a missing
+or broken GPU but means only that no device supports this particular
+combination — the same file encodes fine as H.265 on the same card. Ordinary
+releases are 4:2:0 and unaffected.
 
 **Encoding is NVIDIA-only** — see the table below.
+
+### Not verified
+
+Everything above was checked against real files. The following could not be, and
+is stated as expectation rather than fact. Reports from anyone able to test these
+are welcome.
+
+| | Why it is untested |
+|---|---|
+| DTS-HD Master Audio | FFmpeg cannot produce a lossless DTS track, so no test file could be built. Core DTS is verified and converts normally. |
+| Dolby Vision | Building a stream with a genuine Dolby Vision layer is not possible with the tools at hand. |
+| Behaviour on AMD and Intel GPUs | No such hardware available — which is also why those encoders are not implemented. |
 
 ## Planned
 
@@ -149,9 +168,9 @@ roughly in that order.
   The archive is checked against the publisher's SHA-256 before anything is
   extracted, and nothing is downloaded without asking first.
 
-Output is written as MP4, which cannot carry TrueHD or DTS-HD Master Audio. A
-Blu-ray remux with a lossless track will fail to convert; releases with AC-3,
-E-AC-3, DTS or AAC audio are unaffected, and all of their tracks are preserved.
+Output is written as MP4. Releases with AC-3, E-AC-3, DTS or AAC audio convert
+without issue and keep every track; a Blu-ray remux with a lossless TrueHD track
+will fail rather than lose it. See [Limitations](#limitations).
 
 ### Encoder support
 
