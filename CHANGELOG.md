@@ -5,6 +5,27 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-08-12
+
+### Fixed
+
+- **The category column no longer truncates its entries.** Its width was fixed,
+  which fit the German labels but cut the English ones off mid-word. The column
+  is now sized from the rendered width of the actual category names, so it holds
+  for either language and for any label added later. This affects the media type
+  confirmation dialog and the library table.
+
+### Documentation
+
+- Added a section on what survives conversion and what does not — lossless
+  Blu-ray audio, Dolby Vision, subtitle positioning and 4:4:4 sources — each
+  verified by round-tripping a test file through the actual conversion command
+  rather than reasoned from the format specifications.
+- Added a list of planned work: H.265, MKV as an output container, software
+  encoding, and AMD/Intel support.
+- Documented loudness normalisation and HDR passthrough, neither of which had
+  been mentioned despite being present since the first release.
+
 ## [1.0.1] — 2026-08-12
 
 ### Added
