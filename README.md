@@ -84,26 +84,37 @@ completion, and an optional shutdown afterwards.
 - An NVIDIA GPU with NVENC — see below
 - FFmpeg and FFprobe available on `PATH`
 
-### Hardware support
+### Encoder support
 
-**Encoding requires NVIDIA hardware.** Amboss drives NVENC through FFmpeg and
-passes NVENC-specific parameters throughout. AMD (AMF) and Intel (Quick Sync)
-are not merely untested — they are not implemented, and FFmpeg rejects the
-current parameters before it ever reaches the GPU. Support for them, and for
-CPU-based encoding as a universal fallback, may be added later.
+The table describes what Amboss implements, which is narrower than what the
+hardware can do.
 
-| Codec | Requirement |
-|---|---|
-| AV1 | GeForce RTX 4000 series or newer |
-| H.264 | Practically any NVIDIA GPU of the past decade |
+| Encoder | AV1 | H.264 | H.265 |
+|---|:--:|:--:|:--:|
+| **NVIDIA** — NVENC | ✔ | ✔ | ✘ |
+| **AMD** — AMF | ✘ | ✘ | ✘ |
+| **Intel** — Quick Sync | ✘ | ✘ | ✘ |
+| **CPU** — software encoding | ✘ | ✘ | ✘ |
+
+✔ available · ✘ not implemented
+
+AV1 through NVENC requires a GeForce RTX 4000 series card or newer. H.264 works
+on practically any NVIDIA GPU of the past decade.
+
+AMD and Intel are not simply untested. Amboss passes NVENC-specific parameters
+throughout — `-cq` for quality, `-preset p1…p7` for speed — and FFmpeg rejects
+those for other encoders while still parsing options, long before a GPU is
+involved. Supporting them means mapping every parameter per encoder, which is
+planned rather than pending, alongside software encoding as a fallback for
+machines without a suitable GPU and H.265 for players that predate AV1.
 
 Worth separating, because it is a common source of confusion: playing AV1 back
 and producing it are two different hardware capabilities. Nearly every recent
-GPU — integrated graphics included — decodes AV1; far fewer can encode it. An
+GPU, integrated graphics included, decodes AV1; far fewer can encode it. An
 RTX 3080 plays AV1 without effort but cannot create it.
 
-Amboss checks the selected encoder against FFmpeg on startup and reports a
-missing one rather than failing mid-run.
+Amboss verifies the selected encoder against FFmpeg on startup and reports a
+missing one rather than failing part-way through a batch.
 
 ## Installation
 
