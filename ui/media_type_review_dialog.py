@@ -13,6 +13,7 @@ und shutdown_countdown_dialog.py, gleicher Grund)."""
 
 from typing import Dict, List, Tuple
 
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import QAbstractItemView, QHeaderView, QTableWidgetItem
 from qfluentwidgets import BodyLabel, ComboBox, TableWidget, TitleLabel
 
@@ -89,6 +90,13 @@ class MediaTypeReviewDialog(FittedMessageBox):
             self._combos.append(combo)
 
         table.resizeColumnToContents(1)
+        # Die Kategorie-Spalte an den längsten Eintrag anpassen. resizeColumnToContents
+        # hilft hier nicht: Qt bemisst dabei nur die Zellen-Einträge, nicht die per
+        # setCellWidget eingesetzten Auswahlfelder - die Spalte bliebe zu schmal und
+        # "Animated movies" stünde abgeschnitten da.
+        metrics = QFontMetrics(table.font())
+        widest = max((metrics.width(tr(name)) for name in NAS_CATEGORIES), default=0)
+        table.setColumnWidth(2, widest + 68)  # Aufklapp-Pfeil, Innenabstand, Rahmen
         self.viewLayout.addWidget(table, 1)
 
         self.yesButton.setText(tr("Bestätigen und starten"))

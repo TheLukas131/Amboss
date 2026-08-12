@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFontMetrics
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QFileDialog, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QSizePolicy, QSystemTrayIcon,
@@ -1293,9 +1293,22 @@ class MainWindow(FluentWindow):
         }
         return mapping.get(media_type, tr("Filme"))
 
+    def _fit_category_column(self):
+        """Passt die Kategorie-Spalte an den längsten Eintrag an.
+
+        Eine feste Breite reicht nicht: die Kategorienamen sind übersetzt, und
+        was auf Deutsch knapp passt ("Anime Filme"), läuft auf Englisch über
+        ("Animated Movies"). Deshalb wird gemessen statt geschätzt."""
+        metrics = QFontMetrics(self.nas_table.font())
+        widest = max((metrics.width(tr(name)) for name in self.nas_categories),
+                     default=0)
+        # Zuschlag für Aufklapp-Pfeil, Innenabstand und Rahmen des Auswahlfelds.
+        self.nas_table.setColumnWidth(3, max(150, widest + 68))
+
     def update_nas_table(self):
         colors = theme.semantic_colors()
         self.nas_table.setRowCount(len(self.nas_items))
+        self._fit_category_column()
 
         for row, item in enumerate(self.nas_items):
             checkbox = CheckBox()
