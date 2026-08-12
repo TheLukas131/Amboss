@@ -1,0 +1,8 @@
+# Amboss - Python-Abhaengigkeiten
+# Installation: pip install -r requirements.txt
+
+PyQt5>=5.15.0
+PyQt-Fluent-Widgets[full]>=1.11.0
+
+# Für die Kompilierung als EXE (optional)
+pyinstaller>=5.0.0

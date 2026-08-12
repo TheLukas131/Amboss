@@ -1,0 +1,16 @@
+# PyInstaller-Ausgabe (die fertige exe ist ~89 MB und wird aus dem Quellcode gebaut)
+build/
+dist/
+dist_new/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Laufzeitdaten - liegen eigentlich in %APPDATA%\AV1VideoConverter,
+# hier nur als Sicherheitsnetz, falls mal etwas im Projektordner landet
+*.log
+config.json
