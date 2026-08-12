@@ -108,11 +108,14 @@ what causes each one — the MP4 container, the limits of NVENC, or a decision
 made here.
 
 **Sources with TrueHD audio fail to convert.** TrueHD — the carrier for Dolby
-Atmos on Blu-ray — can be placed in MP4, but FFmpeg classes that combination as
-experimental and refuses it unless `-strict -2` is passed, which Amboss does not
-do. The result is a failed file rather than a silent loss: the output is
-discarded and the source is left alone. Web releases are unaffected, since they
-carry Atmos inside E-AC-3, which MP4 handles normally.
+Atmos on Blu-ray — can technically be placed in MP4, but FFmpeg still classes
+that combination as experimental and refuses it unless `-strict -2` is passed
+(verified on FFmpeg 7.1.1). Amboss does not pass it, by choice: the resulting
+file would satisfy the duration check and the sources would be deleted, while
+few players can actually read TrueHD from an MP4. A clean failure is preferable
+— the output is discarded and the source left alone. Web releases are
+unaffected, since they carry Atmos inside E-AC-3, which MP4 handles normally.
+MKV output, planned below, is the proper fix.
 
 **Dolby Vision metadata is expected to be lost.** NVENC does not carry it
 through a re-encode. Where a source also has an HDR10 base layer, that base
@@ -133,6 +136,11 @@ or broken GPU but means only that no device supports this particular
 combination — the same file encodes fine as H.265 on the same card. Ordinary
 releases are 4:2:0 and unaffected.
 
+**Only `.mp4` files are picked up.** The scan looks for that extension alone, so
+a folder of `.mkv`, `.avi` or `.ts` files reports nothing found rather than
+explaining why. FFmpeg reads all of them; the restriction is in the file search,
+and lifting it is the first item under [Planned](#planned).
+
 **Encoding is NVIDIA-only** — see the table below.
 
 ### Not verified
@@ -149,15 +157,22 @@ are welcome.
 
 ## Planned
 
-Nothing here is implemented yet; the list is what would be worth doing next,
-roughly in that order.
+Nothing here is implemented yet. The list is ordered by what would remove the
+most friction, not by what is most interesting to build.
 
 | | Why |
 |---|---|
+| Reading `.mkv`, `.avi`, `.ts` and `.mov` | The single largest gap: most series and animation releases are MKV, and those folders currently scan as empty |
+| MKV as an output container | Removes the TrueHD, DTS-HD MA and bitmap-subtitle limitations in one step, without writing files that players cannot read |
 | H.265 (HEVC) | For players and TVs that predate AV1 |
-| MKV as an output container | Removes the lossless-audio and bitmap-subtitle limitations above |
+| Handling 4:4:4 sources instead of failing | Convert the chroma rather than refusing the file, while keeping bit depth intact |
 | Software encoding (SVT-AV1) | Makes the application usable without a suitable GPU |
-| AMD (AMF) and Intel (Quick Sync) | Hardware encoding for the remaining vendors |
+| AMD (AMF) and Intel (Quick Sync) | Hardware encoding for the remaining vendors — see the note on why this is last |
+
+The vendor encoders are deliberately last. Amboss verifies output against the
+source duration, not against picture quality, so an encoder that runs but
+produces poor results would report success and the sources would be deleted.
+That cannot be ruled out without the hardware to test on.
 
 ## Requirements
 
