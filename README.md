@@ -251,7 +251,7 @@ and `crash.log`.
 
 The interface is available in English and German; the language follows the system
 locale by default and can be changed under Settings. A change takes effect on the
-next start.
+next start. A light and a dark theme are available and switch immediately.
 
 One option is deliberately not persisted: *shut down PC when finished* resets on
 every launch, so a forgotten checkbox cannot power off the machine during a later
