@@ -69,6 +69,12 @@ is removed.
 **Library uploads are verified byte-for-byte.** Every file is compared against
 its counterpart before local copies are deleted.
 
+**Episode information is written into the file itself.** Alongside renaming,
+each output carries `title`, `show`, `season_number` and `episode_sort` as
+metadata; movies carry `title`. Media servers read these tags rather than
+guessing from the path, so a file identifies itself correctly even after it is
+moved or renamed by something else.
+
 **Loudness can be normalised to EBU R128** (−23 LUFS, true peak −2 dBTP), which
 levels out the volume differences between releases from different sources. It is
 optional and off by default, since it requires re-encoding the audio rather than
@@ -100,6 +106,7 @@ inspecting the result.
 | SubRip subtitles | Preserved, including basic styling |
 | ASS/SSA subtitles | Text, colour, size and weight preserved |
 | Chapter marks and stream language tags | Preserved |
+| Series, season and episode | Written into the output as metadata |
 
 ## Limitations
 
