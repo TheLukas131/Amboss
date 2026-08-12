@@ -28,6 +28,7 @@ from qfluentwidgets import (
 import crash_logging
 from duplicate_detector import filter_duplicate_downloads
 from ffmpeg_processor import FFmpegProcessor
+from gpu_info import detect_gpu
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
     NUMERIC_ONLY, category_for_staging_folder, detect_season_pattern, parse_season_convention,
@@ -48,6 +49,7 @@ from path_generator import PathGenerator
 from pattern_matcher import PatternMatcher
 from settings_manager import SettingsManager
 from ui import theme
+from ui.ffmpeg_download import FFmpegDownloadDialog, ask_to_download, describe_failure
 from ui.log_page import LogPage
 from ui.media_type_review_dialog import MediaTypeReviewDialog
 from ui.merge_review_dialog import MergeReviewDialog
@@ -122,12 +124,18 @@ class MainWindow(FluentWindow):
         except Exception:
             pass  # Nicht kritisch (z.B. auf Windows 10 / Nicht-Windows)
 
+        # Vor dem Seitenaufbau: der Hinweis am Task-Zähler braucht die Angaben.
+        self.gpu_info = detect_gpu()
+
         self._build_pages()
         self._apply_settings_to_controls()
+        self._update_encoder_hint()
         self.check_ffmpeg()
 
         self.eta_timer = QTimer()
         self.eta_timer.timeout.connect(self.update_eta_display)
+
+        self.system_stats_widget.set_gpu(self.gpu_info)
 
         self.gpu_monitor = GpuMonitorThread()
         self.gpu_monitor.stats_ready.connect(self.system_stats_widget.update_stats)
@@ -540,15 +548,28 @@ class MainWindow(FluentWindow):
         options_grid.setHorizontalSpacing(28)
         options_grid.setVerticalSpacing(8)
 
+        tasks_column = QVBoxLayout()
+        tasks_column.setSpacing(2)
+
         tasks_row = QHBoxLayout()
         tasks_row.addWidget(CaptionLabel(tr("Parallele Tasks:")))
         self.parallel_spin = SpinBox()
         self.parallel_spin.setMinimum(1)
-        self.parallel_spin.setMaximum(5)
+        self.parallel_spin.setMaximum(8)
         self.parallel_spin.valueChanged.connect(self._on_convert_control_changed)
+        self.parallel_spin.valueChanged.connect(self._update_encoder_hint)
         tasks_row.addWidget(self.parallel_spin)
         tasks_row.addStretch()
-        options_grid.addLayout(tasks_row, 0, 0)
+        tasks_column.addLayout(tasks_row)
+
+        # Hinweis zur Encoder-Ausstattung. Bewusst nur ein Hinweis und keine
+        # Begrenzung: mehr Läufe als Einheiten bringen zwar wenig, aber messbar
+        # noch etwas - die Entscheidung bleibt beim Nutzer.
+        self.encoder_hint = CaptionLabel("")
+        self.encoder_hint.setWordWrap(True)
+        tasks_column.addWidget(self.encoder_hint)
+
+        options_grid.addLayout(tasks_column, 0, 0)
 
         self.normalize_check = CheckBox(tr("R128 Audio-Normalisierung"))
         self.normalize_check.toggled.connect(self._on_convert_control_changed)
@@ -1534,14 +1555,90 @@ class MainWindow(FluentWindow):
         else:
             self.log("⚠️ Mindestens ein gewählter Encoder nicht verfügbar! Passende NVIDIA-GPU erforderlich.")
 
+    def _offer_ffmpeg_download(self) -> bool:
+        """Bietet an, FFmpeg zu holen. Gibt zurück, ob es danach da ist."""
+        if not ask_to_download(self):
+            self.log(tr("FFmpeg-Download abgelehnt."))
+            return False
+
+        dialog = FFmpegDownloadDialog(self)
+        if dialog.exec() and dialog.result_path:
+            # Prozessor neu aufbauen, damit er die frisch abgelegten Programme sieht.
+            self.ffmpeg = FFmpegProcessor()
+            self._ffmpeg_available = self.ffmpeg.is_available()
+            if self._ffmpeg_available:
+                self.log(tr("FFmpeg eingerichtet: {path}").format(path=dialog.result_path))
+                self._refresh_encoder_availability()
+                self._update_start_button_state()
+                return True
+
+        if dialog.error:
+            self._notify(tr("FFmpeg-Download fehlgeschlagen"), describe_failure(dialog.error))
+        else:
+            self.log(tr("FFmpeg-Download abgebrochen."))
+        return False
+
     def _warn_about_missing_requirements(self):
         """Hinweis auf fehlende Voraussetzungen, nachdem das Fenster steht."""
         if not getattr(self, "_ffmpeg_available", True):
+            if not self._offer_ffmpeg_download():
+                self._notify(
+                    tr("FFmpeg fehlt"),
+                    tr("FFmpeg wurde nicht gefunden.\n\nBitte installieren Sie FFmpeg und stellen Sie "
+                       "sicher, dass es im System-PATH verfügbar ist.")
+                )
+
+        gpu = self.gpu_info
+        if not gpu.is_supported:
+            # Die konkret verbaute Karte mit nennen - "keine NVIDIA-GPU gefunden"
+            # allein lässt offen, ob die App bloß nichts erkannt hat.
+            found = gpu.name or tr("keine Grafikkarte erkannt")
             self._notify(
-                tr("FFmpeg fehlt"),
-                tr("FFmpeg wurde nicht gefunden.\n\nBitte installieren Sie FFmpeg und stellen Sie "
-                   "sicher, dass es im System-PATH verfügbar ist.")
+                tr("Grafikkarte nicht unterstützt"),
+                tr("Gefunden: {found}\n\nAmboss kodiert über NVIDIA NVENC und "
+                   "benötigt dafür eine NVIDIA-Grafikkarte. Encoder von AMD und "
+                   "Intel sind derzeit nicht eingebaut.").format(found=found)
             )
+        elif not gpu.supports_av1:
+            self._notify(
+                tr("AV1 auf dieser Grafikkarte nicht möglich"),
+                tr("{name} kann AV1 zwar abspielen, aber nicht erzeugen. Dafür "
+                   "wird mindestens eine GeForce RTX der 4000er-Reihe benötigt."
+                   "\n\nH.264 funktioniert auf dieser Karte und lässt sich in den "
+                   "Einstellungen als Codec wählen.").format(name=gpu.name)
+            )
+
+    def _update_encoder_hint(self):
+        """Setzt den Hinweis unter dem Zähler für parallele Tasks.
+
+        Bewusst kein Deckel auf die Zahl: über der Einheitenzahl steigt der
+        Durchsatz messbar weiter, nur eben kaum noch. Diese Abwägung gehört dem
+        Nutzer, die App liefert dafür bloß die Tatsachen."""
+        hint = getattr(self, "encoder_hint", None)
+        if hint is None:
+            return
+
+        units = self.gpu_info.encoder_units
+        if not self.gpu_info.is_supported or units is None:
+            hint.setText("")
+            hint.setVisible(False)
+            return
+
+        hint.setVisible(True)
+        # Eigene Texte für den Einzahl-Fall statt "1 Encoder-Einheiten".
+        if self.parallel_spin.value() <= units:
+            template = ("Deine Grafikkarte hat eine Encoder-Einheit." if units == 1
+                        else "Deine Grafikkarte hat {units} Encoder-Einheiten.")
+            hint.setTextColor(QColor(120, 120, 120), QColor(150, 150, 150))
+        else:
+            template = (
+                "Deine Grafikkarte hat nur eine Encoder-Einheit. Mehr "
+                "gleichzeitige Tasks bringen kaum noch Mehrleistung."
+                if units == 1 else
+                "Deine Grafikkarte hat nur {units} Encoder-Einheiten. Mehr "
+                "gleichzeitige Tasks bringen dann kaum noch Mehrleistung.")
+            hint.setTextColor(QColor(191, 122, 0), QColor(255, 190, 80))
+        hint.setText(tr(template).format(units=units))
 
     def _update_start_button_state(self):
         self.start_btn.setEnabled(bool(self.videos) and self.encoder_available)

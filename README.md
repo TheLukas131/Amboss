@@ -7,7 +7,7 @@
 **Batch video converter for Windows — AV1 and H.264 via NVIDIA NVENC, with
 automatic media detection and library filing.**
 
-[Download](../../releases) · [License](LICENSE)
+[Download](../../releases) · [Changelog](CHANGELOG.md) · [License](LICENSE)
 
 <img src="docs/screenshot.png" width="900" alt="">
 
@@ -69,6 +69,15 @@ is removed.
 **Library uploads are verified byte-for-byte.** Every file is compared against
 its counterpart before local copies are deleted.
 
+**Loudness can be normalised to EBU R128** (−23 LUFS, true peak −2 dBTP), which
+levels out the volume differences between releases from different sources. It is
+optional and off by default, since it requires re-encoding the audio rather than
+copying it.
+
+**HDR is preserved.** Bit depth, colour primaries, transfer characteristics and
+matrix coefficients carry through to the output, so an HDR10 source stays HDR10
+rather than arriving washed out.
+
 **Sources are moved to `_InProgress` when a run starts**, leaving the watched
 folder free for new downloads while encoding is under way. Scanning alone never
 moves or deletes anything.
@@ -82,7 +91,14 @@ completion, and an optional shutdown afterwards.
 
 - Windows 10 or 11
 - An NVIDIA GPU with NVENC — see below
-- FFmpeg and FFprobe available on `PATH`
+- FFmpeg and FFprobe. If they are not on `PATH`, Amboss offers to download them
+  on first launch and keeps them in its own folder, leaving the system untouched.
+  The archive is checked against the publisher's SHA-256 before anything is
+  extracted, and nothing is downloaded without asking first.
+
+Output is written as MP4, which cannot carry TrueHD or DTS-HD Master Audio. A
+Blu-ray remux with a lossless track will fail to convert; releases with AC-3,
+E-AC-3, DTS or AAC audio are unaffected, and all of their tracks are preserved.
 
 ### Encoder support
 

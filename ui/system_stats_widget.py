@@ -12,10 +12,11 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, NavigationWidget, ProgressBar
 
+from gpu_info import short_gpu_name
 from gpu_monitor import GpuStats
 from i18n import tr
 
-PANEL_HEIGHT = 150
+PANEL_HEIGHT = 168
 
 
 class SystemStatsWidget(NavigationWidget):
@@ -38,6 +39,12 @@ class SystemStatsWidget(NavigationWidget):
         self.title_label = CaptionLabel(tr("SYSTEM"))
         layout.addWidget(self.title_label)
 
+        # Welche Karte überhaupt erkannt wurde - sonst bleibt bei jeder Meldung
+        # über fehlende Unterstützung offen, was die App eigentlich gefunden hat.
+        self.gpu_name_label = CaptionLabel("–")
+        self.gpu_name_label.setToolTip("")
+        layout.addWidget(self.gpu_name_label)
+
         self.nvenc_value, self.nvenc_bar = self._add_meter(layout, "NVENC")
         self.gpu_value, self.gpu_bar = self._add_meter(layout, "GPU")
 
@@ -46,6 +53,21 @@ class SystemStatsWidget(NavigationWidget):
         layout.addStretch()
 
         self._content.setVisible(False)  # bis zum ersten setCompacted(False)
+
+    def set_gpu(self, info):
+        """Trägt die erkannte Grafikkarte oben ins Panel ein."""
+        if not info or not info.name:
+            self.gpu_name_label.setText(tr("Keine Grafikkarte erkannt"))
+            self.gpu_name_label.setToolTip("")
+            return
+
+        # In der schmalen Leiste ist kein Platz für "NVIDIA GeForce RTX 5090";
+        # der volle Name steht im Tooltip.
+        label = short_gpu_name(info.name)
+        if info.encoder_units:
+            label = f"{label} · {info.encoder_units}× NVENC"
+        self.gpu_name_label.setText(label)
+        self.gpu_name_label.setToolTip(info.name)
 
     def _add_meter(self, layout: QVBoxLayout, name: str):
         row = QHBoxLayout()

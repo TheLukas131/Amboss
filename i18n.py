@@ -203,6 +203,74 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "SYSTEM": "SYSTEM",
         "Keine NVIDIA-GPU erkannt": "No NVIDIA GPU detected",
 
+        # FFmpeg nachladen
+        "Amboss benötigt FFmpeg zum Konvertieren, auf diesem Rechner ist es "
+        "aber nicht installiert.\n\n"
+        "Amboss kann es jetzt herunterladen ({size}) und in seinem eigenen "
+        "Ordner ablegen:\n{target}\n\n"
+        "Quelle: {source}, die offiziellen Windows-Builds von FFmpeg. Am "
+        "System wird nichts verändert; zum Entfernen genügt es, den Ordner "
+        "zu löschen.":
+            "Amboss requires FFmpeg to convert video, and it is not installed "
+            "on this computer.\n\n"
+            "Amboss can download it now ({size}) and keep it in its own "
+            "folder:\n{target}\n\n"
+            "Source: {source}, the official Windows builds of FFmpeg. Nothing "
+            "on the system is modified; deleting that folder removes it again.",
+        "FFmpeg wird geladen": "Downloading FFmpeg",
+        "Herunterladen": "Download",
+        "Nicht jetzt": "Not now",
+        "Verbindung wird aufgebaut...": "Connecting...",
+        "Wird geladen... {percent} %": "Downloading... {percent}%",
+        "Quelle: {source}": "Source: {source}",
+        "etwa {mb} MB": "about {mb} MB",
+        "Größe unbekannt": "size unknown",
+        "FFmpeg-Download fehlgeschlagen": "FFmpeg download failed",
+        "FFmpeg-Download abgelehnt.": "FFmpeg download declined.",
+        "FFmpeg-Download abgebrochen.": "FFmpeg download cancelled.",
+        "FFmpeg eingerichtet: {path}": "FFmpeg set up: {path}",
+        "Die Pruefsumme stimmt nicht - die Datei wurde verworfen.":
+            "The checksum did not match; the file was discarded.",
+        "Die Pruefsumme war nicht abrufbar - es wurde nichts entpackt.":
+            "The checksum could not be retrieved; nothing was extracted.",
+        "Das Archiv enthielt nicht die erwarteten Programme.":
+            "The archive did not contain the expected programs.",
+        "Die heruntergeladenen Programme liessen sich nicht starten.":
+            "The downloaded programs could not be started.",
+        "Der Download ist fehlgeschlagen.": "The download failed.",
+
+        # Encoder-Ausstattung der Grafikkarte
+        "Keine Grafikkarte erkannt": "No graphics card detected",
+        "Deine Grafikkarte hat eine Encoder-Einheit.":
+            "Your graphics card has one encoder unit.",
+        "Deine Grafikkarte hat nur eine Encoder-Einheit. Mehr "
+        "gleichzeitige Tasks bringen kaum noch Mehrleistung.":
+            "Your graphics card has only one encoder unit. Additional "
+            "concurrent tasks add very little throughput.",
+        "Deine Grafikkarte hat {units} Encoder-Einheiten.":
+            "Your graphics card has {units} encoder units.",
+        "Deine Grafikkarte hat nur {units} Encoder-Einheiten. Mehr "
+        "gleichzeitige Tasks bringen dann kaum noch Mehrleistung.":
+            "Your graphics card only has {units} encoder units. Beyond that, "
+            "additional concurrent tasks add very little throughput.",
+        "Grafikkarte nicht unterstützt": "Graphics card not supported",
+        "keine Grafikkarte erkannt": "no graphics card detected",
+        "Gefunden: {found}\n\nAmboss kodiert über NVIDIA NVENC und "
+        "benötigt dafür eine NVIDIA-Grafikkarte. Encoder von AMD und "
+        "Intel sind derzeit nicht eingebaut.":
+            "Found: {found}\n\nAmboss encodes through NVIDIA NVENC and requires "
+            "an NVIDIA graphics card. AMD and Intel encoders are not currently "
+            "implemented.",
+        "AV1 auf dieser Grafikkarte nicht möglich":
+            "AV1 not available on this graphics card",
+        "{name} kann AV1 zwar abspielen, aber nicht erzeugen. Dafür "
+        "wird mindestens eine GeForce RTX der 4000er-Reihe benötigt."
+        "\n\nH.264 funktioniert auf dieser Karte und lässt sich in den "
+        "Einstellungen als Codec wählen.":
+            "{name} can play AV1 back but cannot create it, which requires a "
+            "GeForce RTX 4000 series card or newer.\n\nH.264 works on this card "
+            "and can be selected as the codec in Settings.",
+
         # --- Dialoge und Meldungen ---
         "Ja": "Yes",
         "Nein": "No",
