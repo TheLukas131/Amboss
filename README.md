@@ -61,10 +61,18 @@ explicitly and converts text-based subtitles to `mov_text`. Bitmap subtitle
 formats that MP4 cannot carry are skipped rather than failing the encode.
 
 **Source files are deleted only after a completely clean run.** Deletion is
-deferred until every file in the batch has finished, and each output is verified
-against the source duration first. A truncated encode produces a playable file of
-the wrong length, which a size check does not catch. If any file fails, no source
-is removed.
+deferred until every file in the batch has finished, and each output is checked
+twice before then. Against the source duration, because a truncated encode
+produces a playable file of the wrong length that a size check does not catch.
+And against the number of streams, because a file of the correct length can
+still be missing a second audio track — that failure leaves no trace in duration
+or size, and it is the one that would cost the most if the source were already
+gone. If any file fails, no source is removed.
+
+**The computer is kept awake while work is in progress.** A batch easily runs
+for hours, usually overnight. Sleep is suppressed for the duration of encoding
+and of library transfers, and released again afterwards. The display is not kept
+awake — the screen may switch off as usual.
 
 **Library uploads are verified byte-for-byte.** Every file is compared against
 its counterpart before local copies are deleted.

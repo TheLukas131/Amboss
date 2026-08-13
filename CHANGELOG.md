@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-08-12
+
+### Added
+
+- **Sleep is suppressed while work is in progress.** A batch commonly runs for
+  hours and unattended. If the machine went to sleep, encoding stopped until
+  someone woke it, and a configured shutdown never fired. The display is
+  deliberately left alone and may still switch off.
+- **Output is verified against the number of streams**, not only against
+  duration. A file of the correct length can still be missing a second audio
+  track, and neither duration nor size reveals it. Since sources are deleted
+  after a clean run, that was the failure with the highest cost.
+
+### Changed
+
+- **Scanning no longer blocks the interface.** It now runs off the interface
+  thread and reports progress per file. Previously the window froze for the
+  duration — on a network library that meant roughly ten seconds without any
+  feedback, because reading the season-folder convention alone lists up to
+  sixty show folders per category. Clearing stale temporary files was moved to
+  after the scan rather than in front of it.
+
+### Fixed
+
+- The library list is refreshed once a transfer completes. Items that had
+  already been moved stayed on screen until the next manual scan.
+
 ## [1.0.2] — 2026-08-12
 
 ### Fixed

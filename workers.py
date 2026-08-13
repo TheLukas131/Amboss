@@ -61,6 +61,32 @@ def _set_process_suspended(pid: int, suspend: bool) -> bool:
         return False
 
 
+# Windows-Flags für SetThreadExecutionState.
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def _keep_system_awake(active: bool) -> bool:
+    """Hindert Windows am Einschlafen, solange gearbeitet wird.
+
+    Ein Stapel läuft schnell mehrere Stunden und typischerweise nachts. Schläft
+    der Rechner dabei ein, steht die Konvertierung bis jemand ihn weckt - und
+    ein eingestelltes "danach herunterfahren" löst nie aus. Der Bildschirm wird
+    bewusst NICHT wachgehalten (kein ES_DISPLAY_REQUIRED): er darf ausgehen,
+    nur schlafen legen soll sich der Rechner nicht.
+
+    Gibt False zurück, wenn das nicht möglich war - dann bleibt es beim
+    bisherigen Verhalten, kaputt geht nichts."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        flags = _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED if active else _ES_CONTINUOUS
+        return ctypes.windll.kernel32.SetThreadExecutionState(flags) != 0
+    except (OSError, AttributeError):
+        return False
+
+
 class ConversionWorker(QThread):
     """Worker-Thread für die Videokonvertierung."""
 
@@ -110,6 +136,7 @@ class ConversionWorker(QThread):
         # führt bei PyQt5 zu qFatal() und damit zum sofortigen Prozessabbruch
         # ohne jede Meldung (siehe crash_logging.py).
         try:
+            _keep_system_awake(True)
             max_workers = self.settings.get("parallel_tasks", 3)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -132,6 +159,9 @@ class ConversionWorker(QThread):
                 self._delete_pending_sources()
             except Exception as e:  # noqa: BLE001
                 self.log_message.emit(f"Fehler beim Aufräumen der Quelldateien: {e}")
+            # Die Schlafsperre unbedingt wieder freigeben - auch nach einem
+            # Abbruch, sonst bliebe der Rechner bis zum Beenden der App wach.
+            _keep_system_awake(False)
             self.all_completed.emit()
 
     def _wait_while_paused(self, process: Optional[subprocess.Popen] = None):
@@ -193,6 +223,16 @@ class ConversionWorker(QThread):
                 video, cq, preset, self.settings["normalize_audio"], codec, temp_path,
                 subtitle_indices,
             )
+
+            # Womit die Ausgabe später verglichen wird. Muss vor dem Encode
+            # feststehen: danach ist die Quelle unter Umständen schon verschoben.
+            # Video ist immer genau eine Spur ('-map 0:v:0'), Untertitel nur die
+            # textbasierten - Bitmap-Formate werden bewusst nicht übernommen.
+            expected_streams = {
+                "video": 1,
+                "audio": self.ffmpeg.count_streams(video.source_path)["audio"],
+                "subtitle": len(subtitle_indices),
+            }
 
             self.log_message.emit(
                 f"[{video.source_path.name}] Einstellungen: CQ={cq}, Preset={preset}, Codec={codec}"
@@ -257,7 +297,7 @@ class ConversionWorker(QThread):
             if process.returncode == 0 and temp_path.exists():
                 temp_path.replace(video.target_path)
 
-                complete, reason = self._verify_output(video, duration)
+                complete, reason = self._verify_output(video, duration, expected_streams)
                 if not complete:
                     # Die unvollständige Zieldatei muss weg: bliebe sie liegen,
                     # würde der nächste Lauf sie als "schon konvertiert"
@@ -295,13 +335,22 @@ class ConversionWorker(QThread):
             self.file_completed.emit(idx, False, str(e))
             self.log_message.emit(f"FEHLER: {e}")
 
-    def _verify_output(self, video: VideoFile, source_duration: float):
+    def _verify_output(self, video: VideoFile, source_duration: float,
+                       expected_streams: Optional[Dict[str, int]] = None):
         """Prüft, ob die Zieldatei wirklich vollständig ist - nicht nur, ob sie
         existiert und nicht leer ist.
 
-        Entscheidend ist der Vergleich der Laufzeit: ein abgebrochener Encode
-        (Absturz, Stromausfall, voller Datenträger) hinterlässt eine abspielbare,
-        aber verkürzte Datei. Größe > 0 allein hätte die durchgewinkt."""
+        Zwei Dinge werden verglichen, und beide sind nötig:
+
+        Die **Laufzeit**, weil ein abgebrochener Encode (Absturz, Stromausfall,
+        voller Datenträger) eine abspielbare, aber verkürzte Datei hinterlässt.
+        Größe > 0 allein hätte die durchgewinkt.
+
+        Die **Zahl der Spuren**, weil eine Datei mit korrekter Laufzeit trotzdem
+        unvollständig sein kann: fehlt der '-map'-Parameter, wählt ffmpeg pro
+        Streamtyp nur einen aus, und die zweite Tonspur verschwindet lautlos.
+        Genau das ist in diesem Projekt schon einmal passiert. Die Laufzeit war
+        dabei tadellos - erst danach wird die Quelldatei gelöscht."""
         target = video.target_path
         try:
             if not target.exists():
@@ -325,6 +374,16 @@ class ConversionWorker(QThread):
             return False, (
                 f"Zieldatei zu kurz ({target_duration:.0f}s statt {source_duration:.0f}s)"
             )
+
+        if expected_streams:
+            actual = self.ffmpeg.count_streams(target)
+            for kind, label in (("video", "Videospur"), ("audio", "Tonspur"),
+                                ("subtitle", "Untertitelspur")):
+                erwartet, vorhanden = expected_streams.get(kind, 0), actual.get(kind, 0)
+                if vorhanden < erwartet:
+                    return False, (
+                        f"{label}en unvollständig ({vorhanden} statt {erwartet})"
+                    )
 
         return True, ""
 
@@ -371,6 +430,144 @@ class ConversionWorker(QThread):
             pass
 
 
+class ScanResult:
+    """Ergebnis eines Scans, gesammelt im Worker und am Stück übergeben."""
+
+    def __init__(self):
+        self.videos: List[VideoFile] = []
+        self.redundant_duplicates: List[Path] = []
+        self.season_pattern: str = ""
+        self.ignored_count: int = 0
+        self.log_lines: List[str] = []
+
+
+class ScanWorker(QThread):
+    """Durchsucht den Quellordner - abseits des Oberflächen-Threads.
+
+    Das war vorher der Grund für ein rund zehn Sekunden eingefrorenes Fenster:
+    der Scan lief mitten im Oberflächen-Thread, und die teuren Schritte liegen
+    alle auf dem Netzlaufwerk - die Staffel-Benennung aus der Mediathek ablesen,
+    den Zielordner nach Resten durchsuchen, pro Datei prüfen ob das Ziel schon
+    existiert. Solange Qt darauf wartet, kann es nichts zeichnen; ein
+    Ladesymbol hätte sich nicht einmal gedreht.
+    """
+
+    progress = pyqtSignal(int, int, str)   # erledigt, gesamt, aktueller Schritt
+    log_message = pyqtSignal(str)
+    finished_ok = pyqtSignal(object)       # ScanResult
+    failed = pyqtSignal(str)
+
+    def __init__(self, source_path: Path, target_path: Path, rename_enabled: bool,
+                 enabled_categories: List[str], category_folders: Dict[str, str],
+                 configured_season_pattern: str, ffmpeg: FFmpegProcessor,
+                 ignored_folders: List[Path], parent=None):
+        super().__init__(parent)
+        self.source_path = source_path
+        self.target_path = target_path
+        self.rename_enabled = rename_enabled
+        self.enabled_categories = enabled_categories
+        self.category_folders = category_folders
+        self.configured_season_pattern = configured_season_pattern
+        self.ffmpeg = ffmpeg
+        self.ignored_folders = ignored_folders
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        # Wie bei den anderen Workern: aus run() darf keine Ausnahme entkommen,
+        # sonst bricht PyQt5 den Prozess ohne Meldung ab.
+        try:
+            result = self._scan()
+            if not self._stop_requested:
+                self.finished_ok.emit(result)
+        except Exception as error:  # noqa: BLE001
+            self.log_message.emit(
+                f"❌ Schwerer Fehler beim Scannen: {error}\n{traceback.format_exc()}")
+            self.failed.emit(str(error))
+
+    def _scan(self) -> ScanResult:
+        from duplicate_detector import filter_duplicate_downloads
+        from library_layout import NUMERIC_ONLY, detect_season_pattern
+        from models import fold_to_enabled
+        from path_generator import PathGenerator
+        from pattern_matcher import PatternMatcher
+
+        result = ScanResult()
+
+        self.progress.emit(0, 0, "Dateien suchen")
+        files = list(self.source_path.rglob("*.mp4"))
+        gefunden = len(files)
+
+        def ist_ausgenommen(pfad: Path) -> bool:
+            try:
+                aufgeloest = pfad.resolve()
+            except OSError:
+                return False
+            for ordner in self.ignored_folders:
+                try:
+                    aufgeloest.relative_to(ordner)
+                    return True
+                except ValueError:
+                    continue
+            return False
+
+        files = [f for f in files if not ist_ausgenommen(f)]
+        result.ignored_count = gefunden - len(files)
+        if self._stop_requested:
+            return result
+
+        files, duplikat_zeilen, result.redundant_duplicates = filter_duplicate_downloads(files)
+        result.log_lines.extend(duplikat_zeilen)
+
+        # Die Staffel-Benennung aus der Mediathek abzulesen ist der teuerste
+        # Einzelschritt - bis zu 60 Serienordner je Kategorie, jeder einzeln
+        # aufgelistet. Deshalb steht er hier und nicht im Oberflächen-Thread.
+        if self.configured_season_pattern:
+            result.season_pattern = self.configured_season_pattern
+        else:
+            self.progress.emit(0, len(files), "Mediathek lesen")
+            erkannt = detect_season_pattern(self.category_folders.values())
+            result.season_pattern = erkannt or NUMERIC_ONLY
+            if erkannt:
+                result.log_lines.append(
+                    f"Staffel-Benennung aus der Mediathek übernommen: '{erkannt}'")
+        if self._stop_requested:
+            return result
+
+        gesamt = len(files)
+        for nummer, datei in enumerate(files, start=1):
+            if self._stop_requested:
+                return result
+            self.progress.emit(nummer, gesamt, datei.name)
+
+            video = PatternMatcher.analyze(datei)
+            video.media_type = fold_to_enabled(video.media_type, self.enabled_categories)
+            video.target_path = PathGenerator.generate(
+                video, self.target_path, self.rename_enabled,
+                self.category_folders, result.season_pattern)
+
+            if video.target_path.exists():
+                video.status = FileStatus.UEBERSPRUNGEN
+
+            result.videos.append(video)
+            result.log_lines.append(f"  → {datei.name} [{video.media_type.value}]")
+
+        if result.videos and not self._stop_requested:
+            self.progress.emit(gesamt, gesamt, "Videodaten lesen")
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for video, metadata in zip(
+                    result.videos,
+                    executor.map(self.ffmpeg.get_video_metadata,
+                                 [v.source_path for v in result.videos]),
+                ):
+                    video.source_metadata = metadata
+
+        PathGenerator.resolve_collisions(result.videos)
+        return result
+
+
 class NASUploadWorker(QThread):
     """Worker-Thread für das Verschieben von Medien auf NAS."""
 
@@ -400,6 +597,10 @@ class NASUploadWorker(QThread):
         # Siehe ConversionWorker.run(): aus einer QThread-Methode darf keine
         # Ausnahme entkommen, sonst bricht PyQt5 den Prozess hart ab.
         try:
+            # Auch das Verschieben soll nicht vom Ruhezustand unterbrochen werden -
+            # über Netzlaufwerke dauert es bei großen Mediatheken oft länger als
+            # das Konvertieren selbst.
+            _keep_system_awake(True)
             # Byte-gewichtet statt Item-gewichtet: bei sehr unterschiedlich großen
             # Ordnern (z.B. 2 kleine Serien + 1 riesiger Film) wäre "2 von 3 Items
             # fertig" = 66% völlig irreführend, obwohl kaum Daten geflossen sind.
@@ -423,6 +624,7 @@ class NASUploadWorker(QThread):
                 self._delete_pending_folders()
             except Exception as e:  # noqa: BLE001
                 self.log_message.emit(f"Fehler beim Aufräumen der lokalen Ordner: {e}")
+            _keep_system_awake(False)
             self.all_completed.emit()
 
     def _process_item(self, idx: int, item: NASUploadItem):

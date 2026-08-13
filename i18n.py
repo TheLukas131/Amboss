@@ -203,6 +203,16 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "SYSTEM": "SYSTEM",
         "Keine NVIDIA-GPU erkannt": "No NVIDIA GPU detected",
 
+        # Scannen im Hintergrund
+        "Scannt...": "Scanning...",
+        "Scannt... {done} von {total}": "Scanning... {done} of {total}",
+        "Scan fehlgeschlagen": "Scan failed",
+        "Der Ordner konnte nicht gelesen werden:\n\n{error}":
+            "The folder could not be read:\n\n{error}",
+        "Dateien suchen": "Looking for files",
+        "Mediathek lesen": "Reading library",
+        "Videodaten lesen": "Reading video details",
+
         # FFmpeg nachladen
         "Amboss benötigt FFmpeg zum Konvertieren, auf diesem Rechner ist es "
         "aber nicht installiert.\n\n"

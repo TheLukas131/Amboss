@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from models import MediaType, VideoFile, VideoMetadata
 
@@ -111,6 +111,30 @@ class FFmpegProcessor:
             return float(result.stdout.strip())
         except (subprocess.SubprocessError, ValueError, OSError):
             return 0.0
+
+    def count_streams(self, filepath: Path) -> Dict[str, int]:
+        """Zählt Video-, Audio- und Untertitelspuren einer Datei.
+
+        Dient dem Abgleich zwischen Quelle und Ergebnis: eine Konvertierung, die
+        eine zweite Tonspur verliert, erzeugt trotzdem eine abspielbare Datei
+        richtiger Länge. Ohne diesen Vergleich fiele so etwas erst auf, wenn die
+        Quelldatei längst gelöscht ist."""
+        counts = {"video": 0, "audio": 0, "subtitle": 0}
+        try:
+            result = subprocess.run([
+                self.ffprobe_path, "-v", "error",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(filepath),
+            ], capture_output=True, text=True, timeout=30, creationflags=_CREATIONFLAGS)
+        except (subprocess.SubprocessError, OSError):
+            return counts
+
+        for line in result.stdout.splitlines():
+            kind = line.strip()
+            if kind in counts:
+                counts[kind] += 1
+        return counts
 
     def get_video_metadata(self, filepath: Path) -> VideoMetadata:
         """Ermittelt detaillierte Metadaten einer Videodatei mit FFprobe."""

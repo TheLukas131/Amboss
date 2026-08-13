@@ -61,7 +61,7 @@ from ui.system_stats_widget import SystemStatsWidget
 from ui.widgets import (
     DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT, enforce_control_heights,
 )
-from workers import ConversionWorker, NASUploadWorker
+from workers import ConversionWorker, NASUploadWorker, ScanWorker
 from i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ class MainWindow(FluentWindow):
 
         self.nas_items: List[NASUploadItem] = []
         self.nas_worker: Optional[NASUploadWorker] = None
+        self.scan_worker: Optional[ScanWorker] = None
         # Worker-Index -> Tabellenzeile, siehe _start_nas_upload/_nas_row_for
         self._nas_row_for_worker_idx: Dict[int, int] = {}
         # Seitenwechsel-Sperre, siehe _on_stacked_page_changed
@@ -1205,6 +1206,21 @@ class MainWindow(FluentWindow):
             self.nas_status_label.setText(f" {len(active)} Ziele erreichbar")
             self.log("✅ Alle Zielordner erreichbar: " + ", ".join(active))
 
+    def _refresh_library_after_upload(self, completed: int):
+        """Liest die Liste nach einem Verschiebe-Lauf neu ein.
+
+        Ohne das bleiben erfolgreich verschobene Ordner in der Übersicht stehen,
+        obwohl sie lokal nicht mehr existieren. Der Neuaufbau ist dem Entfernen
+        einzelner Zeilen vorzuziehen: er bildet ab, was wirklich noch da ist -
+        einschließlich der Ordner, die bei abgeschaltetem "lokal löschen"
+        absichtlich liegenbleiben."""
+        if not completed:
+            return
+        try:
+            self.scan_converted_folder()
+        except Exception as error:  # noqa: BLE001 - Anzeige darf nie den Lauf kippen
+            self.log(f"Mediathek-Liste konnte nicht aktualisiert werden: {error}")
+
     def scan_converted_folder(self):
         """Scannt den Converted-Ordner nach Medien.
 
@@ -1501,6 +1517,13 @@ class MainWindow(FluentWindow):
         completed = sum(1 for item in self.nas_items if item.status == NASUploadStatus.FERTIG)
         failed = sum(1 for item in self.nas_items if item.status == NASUploadStatus.FEHLER)
 
+        # Die Liste zeigt, was lokal auf das Verschieben wartet. Nach einem Lauf
+        # stimmt sie nicht mehr: verschobene Ordner sind weg, stehen aber weiter
+        # da. Neu einlesen statt Einträge zu entfernen - so bleiben Ordner
+        # sichtbar, die bewusst liegenbleiben (wenn "lokal löschen" aus ist)
+        # oder deren Verschieben fehlgeschlagen ist.
+        self._refresh_library_after_upload(completed)
+
         self.log(f"\n{'=' * 50}\nNAS-Upload abgeschlossen!\n✅ Erfolgreich: {completed}\n❌ Fehlgeschlagen: {failed}\n{'=' * 50}\n")
 
         if failed > 0:
@@ -1775,6 +1798,14 @@ class MainWindow(FluentWindow):
             self.target_summary_label.setText(tr("Noch nichts konvertiert"))
 
     def scan_files(self):
+        """Startet den Scan. Die Arbeit selbst passiert im ScanWorker.
+
+        Vorher lief alles hier, im Oberflächen-Thread - das Fenster fror für die
+        Dauer ein, ohne jede Rückmeldung. Die teuren Schritte liegen auf dem
+        Netzlaufwerk und dauern damit ein Vielfaches der reinen Rechenzeit."""
+        if self.scan_worker and self.scan_worker.isRunning():
+            return
+
         source = self.source_input.text().strip()
 
         if not source:
@@ -1793,11 +1824,9 @@ class MainWindow(FluentWindow):
 
         self.log(f"Scanne Ordner: {source}")
         self.videos.clear()
+        self.update_file_table()
 
         source_path = Path(source)
-        mp4_files = list(source_path.rglob("*.mp4"))
-        total_found = len(mp4_files)
-
         target = self.target_input.text().strip()
         if not target:
             target = str(source_path / DEFAULT_OUTPUT_FOLDER)
@@ -1807,78 +1836,83 @@ class MainWindow(FluentWindow):
         ignored_folders = [target_path, (source_path / DEFAULT_OUTPUT_FOLDER).resolve(),
                            (target_path / "_Unknown_Format").resolve()]
 
-        def is_ignored(file_path: Path) -> bool:
-            resolved = file_path.resolve()
-            for ignored in ignored_folders:
-                try:
-                    resolved.relative_to(ignored)
-                    return True
-                except ValueError:
-                    continue
-            return False
+        self._set_scan_running(True)
 
-        mp4_files = [f for f in mp4_files if not is_ignored(f)]
-        ignored_count = total_found - len(mp4_files)
+        self.scan_worker = ScanWorker(
+            source_path=source_path,
+            target_path=Path(target),
+            rename_enabled=self.rename_check.isChecked(),
+            enabled_categories=list(self.active_category_folders()),
+            category_folders=self.settings.get("category_folders") or {},
+            configured_season_pattern=(self.settings.get("season_folder_pattern") or "").strip(),
+            ffmpeg=self.ffmpeg,
+            ignored_folders=ignored_folders,
+        )
+        self.scan_worker.progress.connect(self._on_scan_progress)
+        self.scan_worker.log_message.connect(self.log)
+        self.scan_worker.finished_ok.connect(self._on_scan_finished)
+        self.scan_worker.failed.connect(self._on_scan_failed)
+        self.scan_worker.start()
 
-        if ignored_count > 0:
-            self.log(f"Gefunden: {len(mp4_files)} MP4-Dateien ({ignored_count} ignoriert im Output-Ordner)")
+    def _set_scan_running(self, running: bool):
+        """Sperrt die Bedienelemente, die während eines Scans nicht passen."""
+        self.scan_btn.setEnabled(not running)
+        self.scan_btn.setText(tr("Scannt...") if running else tr("Dateien scannen"))
+        self.clear_list_btn.setEnabled(not running and bool(self.videos))
+        if running:
+            self.start_btn.setEnabled(False)
+
+    def _on_scan_progress(self, done: int, total: int, message: str):
+        if total:
+            self.stats_label.setText(
+                tr("Scannt... {done} von {total}").format(done=done, total=total))
         else:
-            self.log(f"Gefunden: {len(mp4_files)} MP4-Dateien")
+            self.stats_label.setText(tr("Scannt..."))
+        if message:
+            self.source_summary_label.setText(message)
 
-        mp4_files, duplicate_log_lines, self._redundant_duplicates = filter_duplicate_downloads(mp4_files)
-        for line in duplicate_log_lines:
+    def _on_scan_failed(self, message: str):
+        self._set_scan_running(False)
+        self._update_queue_labels()
+        self._notify(tr("Scan fehlgeschlagen"),
+                     tr("Der Ordner konnte nicht gelesen werden:\n\n{error}").format(error=message))
+
+    def _on_scan_finished(self, result):
+        """Übernimmt das Ergebnis des Workers in die Oberfläche."""
+        self._set_scan_running(False)
+
+        if result.ignored_count:
+            self.log(f"Gefunden: {len(result.videos)} Dateien "
+                     f"({result.ignored_count} ignoriert im Output-Ordner)")
+        else:
+            self.log(f"Gefunden: {len(result.videos)} Dateien")
+
+        for line in result.log_lines:
             self.log(line)
+
+        self._redundant_duplicates = result.redundant_duplicates
         if self._redundant_duplicates:
             self.log(
                 f"   {len(self._redundant_duplicates)} doppelte(r) Download wird beim Start der "
                 "Konvertierung gelöscht (Scannen allein ändert nichts)."
             )
 
-        self._cleanup_stale_temp_files(target_path)
+        self._detected_season_pattern = result.season_pattern
+        self.videos = result.videos
 
-        target_path = Path(target)
-        rename_enabled = self.rename_check.isChecked()
-
-        enabled = list(self.active_category_folders())
-        category_folders = self.settings.get("category_folders") or {}
-        season_pattern = self.current_season_pattern()
-        for mp4_file in mp4_files:
-            video = PatternMatcher.analyze(mp4_file)
-            # Auf die Kategorien falten, die der Nutzer tatsaechlich fuehrt
-            video.media_type = fold_to_enabled(video.media_type, enabled)
-            video.target_path = PathGenerator.generate(
-                video, target_path, rename_enabled, category_folders, season_pattern)
-
-            if video.target_path.exists():
-                video.status = FileStatus.UEBERSPRUNGEN
-
-            self.videos.append(video)
-            self.log(f"  → {mp4_file.name} [{video.media_type.value}]")
-
-        # ffprobe pro Datei ist reines Warten auf I/O - parallel statt nacheinander,
-        # sonst dauert der Scan bei vielen Dateien spürbar lange. Die Reihenfolge
-        # bleibt erhalten, da jedes Ergebnis seinem eigenen VideoFile zugeordnet wird.
-        if self.videos:
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                for video, metadata in zip(
-                    self.videos,
-                    executor.map(self.ffmpeg.get_video_metadata,
-                                 [v.source_path for v in self.videos]),
-                ):
-                    video.source_metadata = metadata
-
-        PathGenerator.resolve_collisions(self.videos)
+        # Erst jetzt, nachdem der Scan durch ist: das Aufräumen liegengebliebener
+        # Temp-Dateien durchsucht den Zielordner rekursiv und hat mit dem
+        # Ergebnis des Scans nichts zu tun.
+        self._cleanup_stale_temp_files(Path(self.target_input.text().strip() or "."))
 
         self.update_file_table()
         self.update_details_tree()
         self.update_statistics()
         self.update_total_progress()
-
         self._update_queue_labels()
-        total = len(self.videos)
 
         self._update_start_button_state()
-        self.clear_list_btn.setEnabled(total > 0)
+        self.clear_list_btn.setEnabled(bool(self.videos))
 
     def update_file_table(self):
         colors = theme.semantic_colors()
