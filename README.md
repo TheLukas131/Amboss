@@ -261,6 +261,8 @@ The interface is available in English and German; the language follows the syste
 locale by default and can be changed under Settings. A change takes effect on the
 next start. A light and a dark theme are available and switch immediately.
 
+The changelog is readable from inside the application, under Settings.
+
 One option is deliberately not persisted: *shut down PC when finished* resets on
 every launch, so a forgotten checkbox cannot power off the machine during a later
 session.

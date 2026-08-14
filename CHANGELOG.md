@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-08-14
+
+### Added
+
+- **The changelog can be read inside the application**, under Settings. It is
+  the same file that ships with the source, so there is one text rather than a
+  second one that drifts out of date.
+
+### Fixed
+
+- **Scanning now shows that it is working.** Moving the scan off the interface
+  thread stopped the freeze but left nothing on screen: the expensive step —
+  reading the season-folder convention from the library — reports once and then
+  works silently for several seconds, so the status text sat still and looked
+  no different from a hang. A spinner now runs alongside it, which animates
+  regardless of whether progress is being reported, next to the name of the
+  file being examined.
+
 ## [1.1.0] — 2026-08-12
 
 ### Added

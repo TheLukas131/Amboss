@@ -203,7 +203,15 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "SYSTEM": "SYSTEM",
         "Keine NVIDIA-GPU erkannt": "No NVIDIA GPU detected",
 
+        # Änderungsverlauf im Programm
+        "Über Amboss": "About Amboss",
+        "Änderungsverlauf": "Changelog",
+        "Schließen": "Close",
+        "Der Änderungsverlauf konnte nicht gelesen werden.":
+            "The changelog could not be read.",
+
         # Scannen im Hintergrund
+        "{done} von {total}": "{done} of {total}",
         "Scannt...": "Scanning...",
         "Scannt... {done} von {total}": "Scanning... {done} of {total}",
         "Scan fehlgeschlagen": "Scan failed",

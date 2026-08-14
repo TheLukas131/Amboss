@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel, CardWidget, CaptionLabel, CheckBox, ComboBox, FluentIcon,
     FluentWindow, HorizontalSeparator, InfoBar, InfoBarPosition, LineEdit,
-    MessageBox, NavigationItemPosition, PillPushButton, PrimaryPushButton,
+    IndeterminateProgressRing, MessageBox, NavigationItemPosition, PillPushButton, PrimaryPushButton,
     ProgressBar, PushButton, SegmentedWidget, Slider, SpinBox, StrongBodyLabel,
     TableWidget, TitleLabel, TransparentToolButton, TreeWidget, qconfig, setTheme,
     setThemeColor,
@@ -616,6 +616,21 @@ class MainWindow(FluentWindow):
         self.scan_btn = PushButton(tr("Dateien scannen"))
         self.scan_btn.clicked.connect(self.scan_files)
         toolbar_row.addWidget(self.scan_btn)
+
+        # Ein sich drehender Ring statt bloßer Textmeldungen. Grund: der teuerste
+        # Schritt (die Mediathek nach der Staffel-Benennung absuchen) meldet sich
+        # genau einmal und arbeitet dann sekundenlang stumm weiter. Ein Text, der
+        # dabei stillsteht, sieht aus wie ein hängendes Programm - der Ring dreht
+        # sich unabhängig davon, ob gerade eine Meldung kommt.
+        self.scan_spinner = IndeterminateProgressRing()
+        self.scan_spinner.setFixedSize(20, 20)
+        self.scan_spinner.setStrokeWidth(3)
+        self.scan_spinner.setVisible(False)
+        toolbar_row.addWidget(self.scan_spinner)
+
+        self.scan_status_label = CaptionLabel("")
+        self.scan_status_label.setVisible(False)
+        toolbar_row.addWidget(self.scan_status_label)
 
         self.clear_list_btn = PushButton(tr("Liste leeren"))
         self.clear_list_btn.clicked.connect(self.clear_file_list)
@@ -1855,21 +1870,32 @@ class MainWindow(FluentWindow):
         self.scan_worker.start()
 
     def _set_scan_running(self, running: bool):
-        """Sperrt die Bedienelemente, die während eines Scans nicht passen."""
+        """Sperrt die Bedienelemente, die während eines Scans nicht passen,
+        und blendet die Fortschrittsanzeige ein bzw. aus."""
         self.scan_btn.setEnabled(not running)
-        self.scan_btn.setText(tr("Scannt...") if running else tr("Dateien scannen"))
         self.clear_list_btn.setEnabled(not running and bool(self.videos))
+        self.scan_spinner.setVisible(running)
+        self.scan_status_label.setVisible(running)
         if running:
             self.start_btn.setEnabled(False)
+            self.scan_status_label.setText(tr("Scannt..."))
+        else:
+            self.scan_status_label.setText("")
 
     def _on_scan_progress(self, done: int, total: int, message: str):
+        # Neben dem Ring auch benennen, woran gerade gearbeitet wird - gerade
+        # beim Lesen der Mediathek dauert ein einzelner Schritt am längsten.
+        if total and done:
+            text = tr("{done} von {total}").format(done=done, total=total)
+            if message:
+                text = f"{text} · {message}"
+        else:
+            text = message or tr("Scannt...")
+        self.scan_status_label.setText(text)
+
         if total:
             self.stats_label.setText(
                 tr("Scannt... {done} von {total}").format(done=done, total=total))
-        else:
-            self.stats_label.setText(tr("Scannt..."))
-        if message:
-            self.source_summary_label.setText(message)
 
     def _on_scan_failed(self, message: str):
         self._set_scan_running(False)

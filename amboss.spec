@@ -19,7 +19,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.'), ('logo.png', '.')],
+    datas=[('icon.ico', '.'), ('logo.png', '.'), ('CHANGELOG.md', '.')],
     hiddenimports=[
         'PyQt5',
         'PyQt5.QtCore',

@@ -18,6 +18,7 @@ from qfluentwidgets import (
 )
 
 from i18n import tr
+from models import APP_NAME, APP_VERSION
 from ui.brand_widgets import AV1_TRADEMARK_NOTE
 from ui.category_editor import CategoryFolderEditor
 from ui.widgets import ScrollablePage, enforce_control_heights
@@ -100,13 +101,26 @@ class SettingsPage(ScrollablePage):
         self.category_status.setWordWrap(True)
         categories.addWidget(self.category_status)
 
+        about = self._card(outer, tr("Über Amboss"))
+        version_row = QHBoxLayout()
+        version_row.addWidget(BodyLabel(f"{APP_NAME} {APP_VERSION}"))
+        version_row.addStretch()
+        self.changelog_btn = PushButton(tr("Änderungsverlauf"))
+        self.changelog_btn.clicked.connect(self._show_changelog)
+        version_row.addWidget(self.changelog_btn)
+        about.addLayout(version_row)
+
         # Markenhinweis: AV1 ist eine eingetragene Marke, die Nennung im
         # Programm gehoert zur korrekten Zuordnung.
         notice = CaptionLabel(tr(AV1_TRADEMARK_NOTE))
         notice.setWordWrap(True)
-        outer.addWidget(notice)
+        about.addWidget(notice)
 
         outer.addStretch()
+
+    def _show_changelog(self):
+        from ui.changelog_dialog import ChangelogDialog
+        ChangelogDialog(self.window()).exec()
 
     def _card(self, parent_layout, title: str) -> QVBoxLayout:
         card = CardWidget()
