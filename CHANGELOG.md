@@ -21,7 +21,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   while its panel is still hidden is positioned at the default width and never
   corrected afterwards — measured at 244 px inside a 180 px slider.
 
-## [1.2.0] — 2026-08-14
+## [1.2.0] — 2026-08-15
 
 ### Added
 
@@ -75,7 +75,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   regardless of whether progress is being reported, next to the name of the
   file being examined.
 
-## [1.1.0] — 2026-08-12
+## [1.1.0] — 2026-08-13
 
 ### Added
 
