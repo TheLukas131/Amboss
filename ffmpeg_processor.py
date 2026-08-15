@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from models import MediaType, VideoFile, VideoMetadata
+from models import HEVC_MP4_TAG, MediaType, VideoFile, VideoMetadata
 
 _CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -123,15 +123,24 @@ class FFmpegProcessor:
         try:
             result = subprocess.run([
                 self.ffprobe_path, "-v", "error",
-                "-show_entries", "stream=codec_type",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(filepath),
+                "-show_entries", "stream=index,codec_type",
+                "-of", "json", str(filepath),
             ], capture_output=True, text=True, timeout=30, creationflags=_CREATIONFLAGS)
-        except (subprocess.SubprocessError, OSError):
+            streams = json.loads(result.stdout).get("streams", [])
+        except (subprocess.SubprocessError, ValueError, json.JSONDecodeError, OSError):
             return counts
 
-        for line in result.stdout.splitlines():
-            kind = line.strip()
+        # Nach Index eindeutig machen: MPEG-TS führt jeden Stream sowohl global
+        # als auch unter seinem Programm auf, ffprobe gibt ihn dann zweimal aus.
+        # Ungeprüft gezählt ergäbe eine .ts-Datei mit zwei Tonspuren derer vier -
+        # und die Vollständigkeitsprüfung würde jede .ts-Konvertierung verwerfen.
+        gesehen = set()
+        for stream in streams:
+            index = stream.get("index")
+            if index in gesehen:
+                continue
+            gesehen.add(index)
+            kind = stream.get("codec_type")
             if kind in counts:
                 counts[kind] += 1
         return counts
@@ -208,7 +217,12 @@ class FFmpegProcessor:
         zweite Spur (und jeder Untertitel) beim Konvertieren stillschweigend
         verschwunden - fatal, wenn die Quelldatei danach gelöscht oder aufs NAS
         verschoben wird.
+
+        Der Zielcontainer ergibt sich aus der Endung von `output_path` und
+        bestimmt, was überhaupt hineinpasst - siehe die Verzweigungen unten.
         """
+        is_mkv = output_path.suffix.lower() == ".mkv"
+
         cmd = [
             self.ffmpeg_path,
             "-y",
@@ -220,8 +234,14 @@ class FFmpegProcessor:
             "-map", "0:a?",
         ]
 
-        for sub_index in (text_subtitle_indices or []):
-            cmd.extend(["-map", f"0:s:{sub_index}?"])
+        if is_mkv:
+            # MKV nimmt jede Untertitelart auf, auch Bitmap-Formate wie PGS und
+            # VobSub, die bei MP4 übersprungen werden müssen. Deshalb hier alle
+            # Spuren statt nur der textbasierten.
+            cmd.extend(["-map", "0:s?"])
+        else:
+            for sub_index in (text_subtitle_indices or []):
+                cmd.extend(["-map", f"0:s:{sub_index}?"])
 
         cmd.extend([
             "-c:v", codec,
@@ -229,7 +249,21 @@ class FFmpegProcessor:
             "-preset", preset,
         ])
 
-        if text_subtitle_indices:
+        if codec == "hevc_nvenc" and not is_mkv:
+            # Ohne diese Kennung schreibt ffmpeg 'hev1', und Apple-Geräte
+            # spielen H.265 aus einer MP4 dann nicht ab - siehe HEVC_MP4_TAG.
+            cmd.extend(["-tag:v", HEVC_MP4_TAG])
+
+        if is_mkv:
+            # Unverändert übernehmen: MKV braucht keine Umwandlung, damit bleiben
+            # ASS-Positionierung und Bitmap-Untertitel erhalten. '?' schadet
+            # nicht, wenn gar keine Untertitel da sind.
+            cmd.extend(["-c:s", "copy"])
+            # TrueHD und DTS-HD MA passen in MKV ohne Weiteres; FFmpeg stuft die
+            # Kombination anders als bei MP4 nicht als experimentell ein.
+        elif text_subtitle_indices:
+            # MP4 kennt für Untertitel nur mov_text - dabei geht die
+            # ASS-Positionierung verloren, Bitmap-Formate gar nicht erst mit.
             cmd.extend(["-c:s", "mov_text"])
 
         if normalize_audio:

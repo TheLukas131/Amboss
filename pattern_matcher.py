@@ -20,8 +20,11 @@ from models import ANIME_KEYWORDS, MediaType, VideoFile
 class PatternMatcher:
     """Erkennt Medientyp und Serien-/Episoden-Informationen in Dateinamen."""
 
+    # Die Endung ist bewusst offen: gelesen werden auch .mkv, .avi, .ts und
+    # weitere (siehe VIDEO_EXTENSIONS). Vorher stand hier '\.mp4$', wodurch ein
+    # identisch benanntes MKV nicht als Anime-Folge erkannt worden wäre.
     ANIME_PATTERN = re.compile(
-        r'Episode\s*\(?(\d+)\)?\s*Staffel\s*\(?(\d+)\)?\s*von\s*(.+?)\.mp4$',
+        r'Episode\s*\(?(\d+)\)?\s*Staffel\s*\(?(\d+)\)?\s*von\s*(.+?)\.[A-Za-z0-9]{2,5}$',
         re.IGNORECASE
     )
 

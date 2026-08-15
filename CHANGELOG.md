@@ -5,6 +5,42 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-08-14
+
+### Added
+
+- **Formats other than MP4 are read.** `.mkv`, `.avi`, `.ts`, `.mov`, `.m4v`,
+  `.wmv`, `.flv`, `.webm`, `.mpg`, `.mpeg` and `.m2ts` are now found by the
+  scan. Previously only `.mp4` was, so a folder of MKV releases — which is what
+  most series and animation downloads are — reported nothing found, with no
+  indication that the extension was the reason.
+- **H.265 (HEVC) is available as a codec.** It sits between AV1 and H.264:
+  smaller files than H.264, and playable on devices that predate AV1. Written
+  to MP4 it is tagged `hvc1` rather than FFmpeg's default `hev1` — without that,
+  Apple devices refuse to play the file even though it is perfectly valid. It
+  also converts 4:4:4 sources, which the AV1 encoder rejects.
+- **MKV can be chosen as the output container.** MP4 remains the default
+  because it plays on the widest range of devices. MKV takes what MP4 cannot:
+  lossless TrueHD and DTS-HD MA tracks, image-based subtitles (PGS, VobSub) that
+  otherwise have to be dropped, and ASS subtitles with their positioning intact
+  instead of flattened to `mov_text`.
+
+### Changed
+
+- **The quality slider follows the codec.** AV1 rates quality on a scale to 63,
+  H.265 and H.264 only to 51, so the same number sat at a different point
+  depending on the codec — and the stronger AV1 compression was unreachable
+  because the slider stopped at 51 for everything. It now ends where the codec
+  ends, and the label names the scale (`CQ 37/63` rather than `CQ 37`).
+  Switching from a high AV1 value to H.265 lowers it to that codec's maximum,
+  visibly rather than behind the scenes.
+- A card that cannot encode AV1 is now pointed at H.265 rather than H.264. Both
+  work, but H.265 produces considerably smaller files.
+- Filename detection no longer requires a `.mp4` ending, so an episode named
+  identically as `.mkv` is recognised the same way.
+- Changing the container recalculates the targets of files already scanned,
+  rather than leaving paths on screen that would not be produced.
+
 ## [1.1.1] — 2026-08-14
 
 ### Added

@@ -4,7 +4,7 @@
 
 # Amboss
 
-**Batch video converter for Windows — AV1 and H.264 via NVIDIA NVENC, with
+**Batch video converter for Windows — AV1, H.265 and H.264 via NVIDIA NVENC, with
 automatic media detection and library filing.**
 
 [Download](../../releases) · [Changelog](CHANGELOG.md) · [License](LICENSE)
@@ -15,7 +15,7 @@ automatic media detection and library filing.**
 
 ---
 
-Amboss re-encodes a folder of video files to AV1 or H.264 using NVIDIA's hardware
+Amboss re-encodes a folder of video files to AV1, H.265 or H.264 using NVIDIA's
 encoder, identifies each file from its name, renames it to a consistent scheme,
 and moves the result into the matching folder of a media library.
 
@@ -122,15 +122,13 @@ These are the cases where something is lost or the file will not convert, and
 what causes each one — the MP4 container, the limits of NVENC, or a decision
 made here.
 
-**Sources with TrueHD audio fail to convert.** TrueHD — the carrier for Dolby
-Atmos on Blu-ray — can technically be placed in MP4, but FFmpeg still classes
-that combination as experimental and refuses it unless `-strict -2` is passed
-(verified on FFmpeg 7.1.1). Amboss does not pass it, by choice: the resulting
-file would satisfy the duration check and the sources would be deleted, while
-few players can actually read TrueHD from an MP4. A clean failure is preferable
-— the output is discarded and the source left alone. Web releases are
-unaffected, since they carry Atmos inside E-AC-3, which MP4 handles normally.
-MKV output, planned below, is the proper fix.
+**TrueHD audio requires MKV output.** TrueHD — the carrier for Dolby Atmos on
+Blu-ray — can technically be placed in MP4, but FFmpeg still classes that
+combination as experimental and refuses it (verified on FFmpeg 7.1.1). Choosing
+MKV as the container solves it: the track is carried through untouched. With
+MP4 selected, such a file fails rather than losing the track silently — the
+output is discarded and the source left alone. Web releases are unaffected
+either way, since they carry Atmos inside E-AC-3, which MP4 handles normally.
 
 **Dolby Vision metadata is expected to be lost.** NVENC does not carry it
 through a re-encode. Where a source also has an HDR10 base layer, that base
@@ -138,23 +136,20 @@ should survive and the picture stay HDR; a source without one is unlikely to
 come out looking right. This is the one entry here that could not be tested —
 see below.
 
-**ASS subtitle positioning is lost.** Converting to `mov_text` keeps the text and
-its basic appearance but drops absolute positioning and karaoke timing. Typeset
-signs in fansubs will appear as plain subtitle lines.
+**ASS subtitle positioning is lost in MP4.** Converting to `mov_text` keeps the
+text and its basic appearance but drops absolute positioning and karaoke timing,
+so typeset signs in fansubs appear as plain subtitle lines. MKV keeps the tracks
+as they are.
 
-**Bitmap subtitles are dropped.** PGS and VobSub are images, not text, and MP4
-cannot store them. They are skipped so the encode still succeeds.
+**Bitmap subtitles are dropped in MP4.** PGS and VobSub are images, not text,
+and MP4 cannot store them; they are skipped so the encode still succeeds. MKV
+carries them through.
 
-**Sources with 4:4:4 chroma fail.** NVENC's AV1 encoder does not accept them. It
-reports `No capable devices found`, a generic message that reads like a missing
-or broken GPU but means only that no device supports this particular
-combination — the same file encodes fine as H.265 on the same card. Ordinary
-releases are 4:2:0 and unaffected.
-
-**Only `.mp4` files are picked up.** The scan looks for that extension alone, so
-a folder of `.mkv`, `.avi` or `.ts` files reports nothing found rather than
-explaining why. FFmpeg reads all of them; the restriction is in the file search,
-and lifting it is the first item under [Planned](#planned).
+**Sources with 4:4:4 chroma fail under AV1.** NVENC's AV1 encoder does not
+accept them and reports `No capable devices found`, a generic message that reads
+like a missing or broken GPU but means only that no device supports this
+particular combination. Selecting H.265 converts the same file on the same card.
+Ordinary releases are 4:2:0 and unaffected either way.
 
 **Encoding is NVIDIA-only** — see the table below.
 
@@ -177,9 +172,6 @@ most friction, not by what is most interesting to build.
 
 | | Why |
 |---|---|
-| Reading `.mkv`, `.avi`, `.ts` and `.mov` | The single largest gap: most series and animation releases are MKV, and those folders currently scan as empty |
-| MKV as an output container | Removes the TrueHD, DTS-HD MA and bitmap-subtitle limitations in one step, without writing files that players cannot read |
-| H.265 (HEVC) | For players and TVs that predate AV1 |
 | Handling 4:4:4 sources instead of failing | Convert the chroma rather than refusing the file, while keeping bit depth intact |
 | Software encoding (SVT-AV1) | Makes the application usable without a suitable GPU |
 | AMD (AMF) and Intel (Quick Sync) | Hardware encoding for the remaining vendors — see the note on why this is last |
@@ -198,33 +190,42 @@ That cannot be ruled out without the hardware to test on.
   The archive is checked against the publisher's SHA-256 before anything is
   extracted, and nothing is downloaded without asking first.
 
-Output is written as MP4. Releases with AC-3, E-AC-3, DTS or AAC audio convert
-without issue and keep every track; a Blu-ray remux with a lossless TrueHD track
-will fail rather than lose it. See [Limitations](#limitations).
+Input may be `.mp4`, `.mkv`, `.avi`, `.ts`, `.mov`, `.m4v`, `.wmv`, `.flv`,
+`.webm`, `.mpg`, `.mpeg` or `.m2ts`. Output is MP4 by default, with MKV
+selectable — MKV carries lossless audio and image-based subtitles that MP4
+cannot hold. See [Limitations](#limitations).
 
 ### Encoder support
 
 The table describes what Amboss implements, which is narrower than what the
 hardware can do.
 
-| Encoder | AV1 | H.264 | H.265 |
+| Encoder | AV1 | H.265 | H.264 |
 |---|:--:|:--:|:--:|
-| **NVIDIA** — NVENC | ✔ | ✔ | ✘ |
+| **NVIDIA** — NVENC | ✔ | ✔ | ✔ |
 | **AMD** — AMF | ✘ | ✘ | ✘ |
 | **Intel** — Quick Sync | ✘ | ✘ | ✘ |
 | **CPU** — software encoding | ✘ | ✘ | ✘ |
 
 ✔ available · ✘ not implemented
 
-AV1 through NVENC requires a GeForce RTX 4000 series card or newer. H.264 works
-on practically any NVIDIA GPU of the past decade.
+AV1 requires a GeForce RTX 4000 series card or newer and gives the smallest
+files. H.265 is the middle ground for devices that predate AV1, and H.264 plays
+on practically anything. H.265 written to MP4 is tagged `hvc1` rather than
+FFmpeg's default `hev1`, without which Apple devices refuse to play the file.
+
+Quality is set as a CQ value, where lower means better. The scales differ by
+codec — AV1 runs to 63, H.265 and H.264 to 51 — so the slider ends where the
+selected codec ends and the label names the scale, as `CQ 37/63`. The same
+number therefore does not mean the same thing across codecs. Speed presets
+(`p1` fastest to `p7` best) are identical for all three.
 
 AMD and Intel are not simply untested. Amboss passes NVENC-specific parameters
 throughout — `-cq` for quality, `-preset p1…p7` for speed — and FFmpeg rejects
 those for other encoders while still parsing options, long before a GPU is
 involved. Supporting them means mapping every parameter per encoder, which is
 planned rather than pending, alongside software encoding as a fallback for
-machines without a suitable GPU and H.265 for players that predate AV1.
+machines without a suitable GPU.
 
 Worth separating, because it is a common source of confusion: playing AV1 back
 and producing it are two different hardware capabilities. Nearly every recent

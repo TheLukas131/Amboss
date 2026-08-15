@@ -4,7 +4,7 @@ import os
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 from i18n import tr
 from qfluentwidgets import (
     ComboBox, LineEdit, PushButton, SingleDirectionScrollArea, SpinBox, isDarkTheme, qconfig,
@@ -32,6 +32,83 @@ def enforce_control_heights(root: QWidget, min_height: int = CONTROL_MIN_HEIGHT)
             if isinstance(widget, PivotItem) or isinstance(widget.parent(), Pivot):
                 continue
             widget.setMinimumHeight(min_height)
+
+
+# Obergrenze für den Scroll-Takt. Darüber hinaus bringt es nichts Sichtbares
+# mehr, kostet aber Rechenzeit - gerade bei 4K, wo jedes Bild teuer ist.
+MAX_SCROLL_FPS = 240
+
+
+def apply_scroll_refresh_rate(root: QWidget, screen=None):
+    """Passt den Scroll-Takt an die Bildwiederholrate des Monitors an.
+
+    qfluentwidgets fährt seine Scroll-Animation mit fest eingestellten 60
+    Bildern je Sekunde. Auf einem 240-Hz-Monitor wirkt das sichtbar stockend:
+    gezeichnet wird nur jedes vierte Bild, das der Schirm anzeigen könnte.
+    Gemessen skaliert es sauber mit - 60 ergab 63 Schritte/s, 240 ergab 219.
+
+    Qts *eigene* Animationen (Seitenwechsel, Ein-/Ausblenden) hängen dagegen an
+    einem internen Zeitgeber mit rund 16 ms, den die öffentliche Schnittstelle
+    nicht freigibt. Die bleiben also bei 60 - dagegen hilft nur ein anderes
+    Oberflächen-System.
+    """
+    if screen is None:
+        screen = QApplication.primaryScreen()
+    rate = int(round(screen.refreshRate())) if screen else 60
+    fps = max(60, min(rate, MAX_SCROLL_FPS))
+
+    motoren = []
+    for widget in [root] + root.findChildren(QWidget):
+        # Scrollflächen tragen ihren Motor direkt, Tabellen/Listen/Bäume
+        # über einen Delegaten mit je einem für waagerecht und senkrecht.
+        smooth = getattr(widget, "smoothScroll", None)
+        if smooth is not None:
+            motoren.append(getattr(smooth, "fixedStepScrollEngine", None))
+        delegat = getattr(widget, "scrollDelagate", None) or getattr(widget, "scrollDelegate", None)
+        if delegat is not None:
+            for richtung in ("verticalSmoothScroll", "horizonSmoothScroll"):
+                teil = getattr(delegat, richtung, None)
+                if teil is not None:
+                    motoren.append(getattr(teil, "fixedStepScrollEngine", None))
+
+    gesetzt = 0
+    for motor in motoren:
+        if motor is not None and hasattr(motor, "fps"):
+            motor.fps = fps
+            gesetzt += 1
+    return fps, gesetzt
+
+
+# Seitenwechsel: Weg und Dauer der Einblend-Bewegung.
+#
+# Vorher schob qfluentwidgets die Seite 76 px in 250 ms. Qt zeichnet Animationen
+# mit rund 60 Schritten je Sekunde - unabhaengig vom Monitor -, das sind also gut
+# 5 px je Schritt. Auf 60 Hz faellt das nicht auf, weil jedes Monitorbild einen
+# neuen Stand bekommt. Auf 120 oder 240 Hz wird derselbe Stand zwei- bzw. viermal
+# hintereinander gezeigt, und dann sieht man die 5-px-Spruenge als Ruckeln.
+#
+# Mit 20 px in 200 ms sind es 1,7 px je Schritt. Auf 60 Hz bleibt es genauso
+# fluessig wie vorher, nur dezenter; darueber verschwindet das Stocken.
+PAGE_SLIDE_PIXELS = 20
+PAGE_SLIDE_DURATION_MS = 200
+
+
+def apply_page_transition(stacked) -> int:
+    """Stellt die Einblend-Bewegung aller Seiten flacher und kuerzer ein."""
+    inner = getattr(stacked, "view", None) or stacked
+    infos = getattr(inner, "aniInfos", None)
+    if not infos:
+        return 0
+
+    angepasst = 0
+    for info in infos:
+        try:
+            info.deltaY = PAGE_SLIDE_PIXELS
+            info.ani.setDuration(PAGE_SLIDE_DURATION_MS)
+            angepasst += 1
+        except (AttributeError, TypeError):
+            continue
+    return angepasst
 
 
 def surface_color() -> str:

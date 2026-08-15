@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from library_layout import NUMERIC_ONLY, season_folder_name, staging_folder_name
-from models import MediaType, VideoFile
+from models import DEFAULT_CONTAINER, MediaType, VideoFile
+
 
 class PathGenerator:
     """Generiert Zielpfade basierend auf erkanntem Medientyp.
@@ -23,24 +24,33 @@ class PathGenerator:
     @staticmethod
     def generate(video: VideoFile, output_base: Path, rename_enabled: bool,
                  category_folders: Optional[dict] = None,
-                 season_pattern: str = NUMERIC_ONLY) -> Path:
-        """Generiert den natürlichen Zielpfad für eine Videodatei (ohne Kollisionsprüfung)."""
+                 season_pattern: str = NUMERIC_ONLY,
+                 container: str = DEFAULT_CONTAINER) -> Path:
+        """Generiert den natürlichen Zielpfad für eine Videodatei (ohne Kollisionsprüfung).
+
+        `container` bestimmt die Endung der Ausgabe - die Quelle kann eine
+        andere haben, eine .mkv wird also je nach Einstellung zu .mp4 oder
+        bleibt .mkv."""
+        endung = f".{(container or DEFAULT_CONTAINER).lstrip('.')}"
+
         if not rename_enabled:
-            return output_base / video.source_path.name
+            # Ohne Umbenennen bleibt der Name, die Endung folgt trotzdem dem
+            # gewählten Container - sonst hieße eine MP4-Ausgabe ".mkv".
+            return output_base / (video.source_path.stem + endung)
 
         category_folders = category_folders or {}
 
         if video.media_type in (MediaType.ANIME, MediaType.SERIEN):
             staging = staging_folder_name(video.media_type.value, category_folders)
             season = season_folder_name(season_pattern, video.season)
-            filename = f"{video.series_name} S{video.season:02d}E{video.episode:02d}.mp4"
+            filename = f"{video.series_name} S{video.season:02d}E{video.episode:02d}{endung}"
             return output_base / staging / video.series_name / season / filename
 
         if video.media_type in (MediaType.FILME, MediaType.ANIME_FILME):
             staging = staging_folder_name(video.media_type.value, category_folders)
-            return output_base / staging / video.movie_name / f"{video.movie_name}.mp4"
+            return output_base / staging / video.movie_name / f"{video.movie_name}{endung}"
 
-        return output_base / "_Unknown_Format" / video.source_path.name
+        return output_base / "_Unknown_Format" / (video.source_path.stem + endung)
 
     @staticmethod
     def resolve_collisions(videos: List[VideoFile]) -> None:

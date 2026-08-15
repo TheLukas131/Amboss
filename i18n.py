@@ -26,8 +26,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Protokoll": "Log",
         "NAS-Upload": "Library upload",
         "Einstellungen": "Settings",
-        "Konvertiert Videos nach AV1 & H.264 über NVIDIA NVENC":
-            "Converts video to AV1 and H.264 using NVIDIA NVENC",
+        "Konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC":
+            "Converts video to AV1, H.265 and H.264 using NVIDIA NVENC",
 
         # --- Quelle/Ziel ---
         "QUELLORDNER": "SOURCE FOLDER",
@@ -47,7 +47,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "PRESET": "PRESET",
         "QUALITÄT": "QUALITY",
         "Erweitert": "Advanced",
-        "CQ {value} · {description}": "CQ {value} · {description}",
+        "CQ {value}/{max} · {description}": "CQ {value}/{max} · {description}",
         "Getrennte Presets (Anime/Realfilm)": "Separate presets (animation / live action)",
         "Zeichentrick komprimiert oft spürbar anders als Realfilm - mit eigenen "
         "CQ/Preset/Codec-Werten je nach erkanntem Medientyp statt einem globalen Wert für alles.":
@@ -203,6 +203,27 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "SYSTEM": "SYSTEM",
         "Keine NVIDIA-GPU erkannt": "No NVIDIA GPU detected",
 
+        # Verständliche Fehlermeldungen
+        "Diese Tonspur passt nicht in MP4 (z.B. TrueHD oder DTS-HD MA). "
+        "Mit MKV als Container bleibt sie erhalten.":
+            "This audio track does not fit in MP4 (TrueHD or DTS-HD MA, for "
+            "example). Choosing MKV as the container keeps it.",
+        "Die Grafikkarte unterstützt diese Kombination nicht - bei AV1 "
+        "meist ein Video mit 4:4:4-Farbabtastung.":
+            "The graphics card does not support this combination — with AV1 "
+            "that usually means a video with 4:4:4 chroma.",
+        "Kein Speicherplatz mehr auf dem Ziellaufwerk.":
+            "No space left on the target drive.",
+        "Kein Schreibzugriff auf den Zielordner.":
+            "No write access to the target folder.",
+        "Unbekannter Fehler": "Unknown error",
+
+        # Ausgabe-Container
+        "Container:": "Container:",
+        "MP4 - überall abspielbar (Standard)": "MP4 - plays everywhere (default)",
+        "MKV - behält verlustfreien Ton und Bild-Untertitel":
+            "MKV - keeps lossless audio and image subtitles",
+
         # Änderungsverlauf im Programm
         "Über Amboss": "About Amboss",
         "Änderungsverlauf": "Changelog",
@@ -283,11 +304,13 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
             "AV1 not available on this graphics card",
         "{name} kann AV1 zwar abspielen, aber nicht erzeugen. Dafür "
         "wird mindestens eine GeForce RTX der 4000er-Reihe benötigt."
-        "\n\nH.264 funktioniert auf dieser Karte und lässt sich in den "
-        "Einstellungen als Codec wählen.":
+        "\n\nH.265 und H.264 funktionieren auf dieser Karte. H.265 "
+        "erzeugt deutlich kleinere Dateien und ist die bessere Wahl, "
+        "solange die Abspielgeräte es beherrschen.":
             "{name} can play AV1 back but cannot create it, which requires a "
-            "GeForce RTX 4000 series card or newer.\n\nH.264 works on this card "
-            "and can be selected as the codec in Settings.",
+            "GeForce RTX 4000 series card or newer.\n\nH.265 and H.264 both work "
+            "on this card. H.265 produces considerably smaller files and is the "
+            "better choice as long as your players support it.",
 
         # --- Dialoge und Meldungen ---
         "Ja": "Yes",
@@ -348,6 +371,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "p6 - Langsamer": "p6 - Slower",
         "p7 - Langsam (Beste Kompression)": "p7 - Slow (best compression)",
         "AV1 (NVENC, GPU) - Standard": "AV1 (NVENC, GPU) - default",
+        "H.265 / HEVC (NVENC, GPU)": "H.265 / HEVC (NVENC, GPU)",
         "H.264 (NVENC, GPU)": "H.264 (NVENC, GPU)",
         "Sehr hohe Qualität": "Very high quality",
         "Hohe Qualität": "High quality",

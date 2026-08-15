@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Amboss"
-APP_TAGLINE = "Konvertiert Videos nach AV1 & H.264 über NVIDIA NVENC"
-APP_VERSION = "1.1.1"
+APP_TAGLINE = "Konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC"
+APP_VERSION = "1.2.0"
 
 DEFAULT_CQ = 37
 DEFAULT_PRESET = "p5"
@@ -30,10 +30,51 @@ PRESET_LABELS = {
     "p7": "p7 - Langsam (Beste Kompression)",
 }
 
-# Beide Codecs laufen über NVENC (GPU-Hardware-Encoding)
+# Alle Codecs laufen über NVENC (GPU-Hardware-Encoding).
+#
+# Reihenfolge nach Nutzen: AV1 komprimiert am besten, braucht aber eine Karte
+# ab der RTX-4000-Reihe. H.265 ist der Mittelweg für Geräte ohne AV1, H.264
+# läuft praktisch überall.
 CODEC_LABELS = {
     "av1_nvenc": "AV1 (NVENC, GPU) - Standard",
+    "hevc_nvenc": "H.265 / HEVC (NVENC, GPU)",
     "h264_nvenc": "H.264 (NVENC, GPU)",
+}
+
+# H.265 in MP4 braucht die Container-Kennung 'hvc1'. FFmpeg schreibt sonst
+# 'hev1', und Apple-Geräte (QuickTime, Safari, iOS) verweigern die Wiedergabe -
+# die Datei wirkt dort defekt, obwohl sie einwandfrei ist. In MKV spielt die
+# Kennung keine Rolle.
+HEVC_MP4_TAG = "hvc1"
+
+# Obergrenze der Qualitätsskala je Encoder. AV1 reicht bis 63, H.265 und H.264
+# nur bis 51 - derselbe CQ-Wert liegt also je nach Codec an einer anderen Stelle
+# der Skala. Der Regler bleibt für alle bei höchstens 51, damit nie ein Wert
+# entsteht, den ein Encoder ablehnt; angezeigt wird die Grenze aber, sonst
+# wechselt beim Codecwechsel unbemerkt die Bedeutung der Zahl.
+CQ_MAXIMUM = {"av1_nvenc": 63, "hevc_nvenc": 51, "h264_nvenc": 51}
+
+
+def cq_maximum_for(codec: str) -> int:
+    return CQ_MAXIMUM.get(codec, 51)
+
+# Eingangsformate, die beim Scannen gefunden werden. FFmpeg liest weit mehr,
+# aber diese decken ab, was als Video-Veröffentlichung tatsächlich vorkommt -
+# und je weiter die Liste, desto eher greift der Scan versehentlich nach
+# Dateien, die niemand konvertieren wollte.
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".m2ts")
+
+# Ausgabe-Container.
+#
+# MP4 bleibt die Vorgabe: es läuft auf Fernsehern, Handys und in Browsern am
+# zuverlässigsten. MKV kann dafür mehr - verlustfreie Tonspuren wie TrueHD, die
+# MP4 nicht aufnimmt, und Bitmap-Untertitel (PGS/VobSub), die beim Weg nach MP4
+# verworfen werden müssen.
+DEFAULT_CONTAINER = "mp4"
+CONTAINERS = ["mp4", "mkv"]
+CONTAINER_LABELS = {
+    "mp4": "MP4 - überall abspielbar (Standard)",
+    "mkv": "MKV - behält verlustfreien Ton und Bild-Untertitel",
 }
 
 # Namensbestandteile, die eine Filmdatei ohne S/E-Muster als Anime-Film erkennen lassen

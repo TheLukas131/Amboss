@@ -39,7 +39,9 @@ from inprogress_mover import (
 from merge_detector import find_truncation_candidates
 from resources import resource_path
 from models import (
-    APP_NAME, APP_TAGLINE, APP_VERSION, ANIME_KEYWORDS, CODEC_LABELS, DEFAULT_OUTPUT_FOLDER,
+    APP_NAME, APP_TAGLINE, APP_VERSION, ANIME_KEYWORDS, CODEC_LABELS, CONTAINERS,
+    DEFAULT_CODEC, cq_maximum_for,
+    CONTAINER_LABELS, DEFAULT_CONTAINER, DEFAULT_OUTPUT_FOLDER,
     FileStatus, MediaType, NAS_CATEGORIES, NASUploadItem, NASUploadStatus,
     PRESET_BUCKET_LABELS, PRESET_BUCKETS, PRESET_LABELS, PRESETS, VideoFile,
     fold_to_enabled,
@@ -59,7 +61,8 @@ from ui.setup_dialog import SetupDialog
 from ui.shutdown_countdown_dialog import ShutdownCountdownDialog
 from ui.system_stats_widget import SystemStatsWidget
 from ui.widgets import (
-    DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT, enforce_control_heights,
+    DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT,
+    apply_page_transition, apply_scroll_refresh_rate, enforce_control_heights,
 )
 from workers import ConversionWorker, NASUploadWorker, ScanWorker
 from i18n import tr
@@ -154,6 +157,13 @@ class MainWindow(FluentWindow):
         if self.settings.is_first_run:
             QTimer.singleShot(0, self._run_first_time_setup)
         QTimer.singleShot(0, self._warn_about_missing_requirements)
+
+        # Scroll-Takt an den Monitor anpassen. Muss nach dem Aufbau aller Seiten
+        # passieren, sonst sind die Tabellen und Scrollflächen noch nicht da.
+        takt, betroffen = apply_scroll_refresh_rate(self)
+        seiten = apply_page_transition(self.stackedWidget)
+        self.log(f"Scroll-Takt: {takt} Bilder/s auf {betroffen} Flächen, "
+                 f"Seitenwechsel geglättet ({seiten} Seiten)")
 
         self._ui_ready = True
 
@@ -584,6 +594,16 @@ class MainWindow(FluentWindow):
         self.delete_source_check.toggled.connect(self._on_convert_control_changed)
         options_grid.addWidget(self.delete_source_check, 1, 1)
 
+        container_row = QHBoxLayout()
+        container_row.addWidget(CaptionLabel(tr("Container:")))
+        self.container_combo = ComboBox()
+        for value in CONTAINERS:
+            self.container_combo.addItem(tr(CONTAINER_LABELS[value]), userData=value)
+        self.container_combo.currentIndexChanged.connect(self._on_convert_control_changed)
+        self.container_combo.currentIndexChanged.connect(self._on_container_changed)
+        container_row.addWidget(self.container_combo, 1)
+        options_grid.addLayout(container_row, 2, 0, 1, 2)
+
         encoding_layout.addLayout(options_grid)
 
     def _build_queue_card(self) -> CardWidget:
@@ -914,16 +934,22 @@ class MainWindow(FluentWindow):
         preset_combo = getattr(self, f"preset_combo{suffix}")
         codec_combo = getattr(self, f"codec_combo{suffix}")
 
+        # Reihenfolge ist wichtig: erst der Codec, denn er bestimmt die
+        # Obergrenze des Reglers. Umgekehrt würde ein gespeicherter AV1-Wert von
+        # 60 am noch geltenden Maximum 51 abgeschnitten - und wäre damit still
+        # verändert, ohne dass jemand etwas angefasst hat.
+        codec = self.settings.get(codec_key)
+        idx = codec_combo.findData(codec)
+        if idx >= 0:
+            codec_combo.setCurrentIndex(idx)
+        slider.setMaximum(cq_maximum_for(codec or DEFAULT_CODEC))
+
         slider.setValue(self.settings.get(cq_key))
-        self.update_crf_label(self.settings.get(cq_key), label)
+        self.update_crf_label(self.settings.get(cq_key), label, codec)
 
         idx = preset_combo.findData(self.settings.get(preset_key))
         if idx >= 0:
             preset_combo.setCurrentIndex(idx)
-
-        idx = codec_combo.findData(self.settings.get(codec_key))
-        if idx >= 0:
-            codec_combo.setCurrentIndex(idx)
 
     def _apply_settings_to_controls(self):
         self._apply_encoding_bucket_to_controls("", "cq", "preset", "codec")
@@ -934,7 +960,15 @@ class MainWindow(FluentWindow):
         self.separate_presets_check.setChecked(use_separate)
         self._on_separate_presets_toggled(use_separate)
 
+        # Erst jetzt, nachdem Codec UND gespeicherter CQ-Wert stehen: sonst
+        # würde ein gespeicherter AV1-Wert von 60 am noch geltenden Maximum 51
+        # abgeschnitten, bevor der Codec überhaupt gesetzt ist.
+        self._apply_cq_range()
+
         self.parallel_spin.setValue(self.settings.get("parallel_tasks"))
+        idx = self.container_combo.findData(self.settings.get("container"))
+        if idx >= 0:
+            self.container_combo.setCurrentIndex(idx)
         self.normalize_check.setChecked(self.settings.get("normalize_audio"))
         self.rename_check.setChecked(self.settings.get("rename_enabled"))
         self.delete_source_check.setChecked(self.settings.get("delete_source_after_convert"))
@@ -963,6 +997,7 @@ class MainWindow(FluentWindow):
             "codec": self.codec_combo.currentData(),
             "use_separate_presets": self.separate_presets_check.isChecked(),
             "parallel_tasks": self.parallel_spin.value(),
+            "container": self.container_combo.currentData(),
             "normalize_audio": self.normalize_check.isChecked(),
             "rename_enabled": self.rename_check.isChecked(),
             "delete_source_after_convert": self.delete_source_check.isChecked(),
@@ -993,6 +1028,7 @@ class MainWindow(FluentWindow):
         self.settings_page.set_category_folders(dialog.category_folders())
         self.settings_page.set_language(dialog.language())
         self._detected_season_pattern = None
+        self.settings.set("detected_season_pattern", "")
         self._save_current_settings()
         self._refresh_nas_targets_label()
 
@@ -1009,6 +1045,7 @@ class MainWindow(FluentWindow):
         previous_language = self.settings.get("language")
         self._save_current_settings()
         self._detected_season_pattern = None  # Zielordner geaendert -> neu ablesen
+        self.settings.set("detected_season_pattern", "")
         self._refresh_nas_targets_label()
         if self.settings_page.language() != previous_language:
             self.settings_page.show_restart_hint()
@@ -1021,6 +1058,31 @@ class MainWindow(FluentWindow):
 
     def _on_encoder_selection_changed(self, *_args):
         self._refresh_encoder_availability()
+        self._apply_cq_range()
+
+    def _apply_cq_range(self):
+        """Passt Reichweite und Beschriftung der Qualitätsregler an den Codec an.
+
+        AV1 rechnet auf einer Skala bis 63, H.265 und H.264 bis 51. Der Regler
+        folgt dem, damit bei AV1 auch die stärkere Kompression erreichbar ist.
+
+        Beim Wechsel nach unten kappt Qt einen zu hohen Wert von selbst. Das ist
+        hier gewollt und unbedenklich, weil man es sieht: der Regler springt
+        sichtbar, und die Beschriftung nennt die neue Grenze. Ein Wert, den der
+        Encoder ablehnt, kann so gar nicht erst entstehen - `-cq 60` an H.265
+        bricht mit 'Value out of range' ab."""
+        paare = [("", self.codec_combo if hasattr(self, "codec_combo") else None)]
+        paare += [(f"_{bucket}", getattr(self, f"codec_combo_{bucket}", None))
+                  for bucket in PRESET_BUCKETS]
+
+        for suffix, kasten in paare:
+            regler = getattr(self, f"crf_slider{suffix}", None)
+            beschriftung = getattr(self, f"crf_label{suffix}", None)
+            if regler is None or beschriftung is None:
+                continue
+            codec = (kasten.currentData() if kasten else None) or DEFAULT_CODEC
+            regler.setMaximum(cq_maximum_for(codec))
+            self.update_crf_label(regler.value(), beschriftung, codec)
 
     def _refresh_encoder_availability(self):
         """Prüft alle aktuell relevanten Encoder - bei getrennten Presets können
@@ -1172,9 +1234,20 @@ class MainWindow(FluentWindow):
         if configured:
             return configured
 
+        # Einmal Ermitteltes wird dauerhaft gemerkt, nicht nur für die laufende
+        # Sitzung. Das Ablesen kostet auf einer Mediathek im Netz mehrere
+        # Sekunden und liefert dabei jedes Mal dasselbe - die Benennung einer
+        # gewachsenen Sammlung ändert sich nicht. Verworfen wird der Wert, wenn
+        # der Nutzer die Kategorie-Ordner ändert (siehe _on_settings_changed).
+        if self._detected_season_pattern is None:
+            self._detected_season_pattern = (
+                self.settings.get("detected_season_pattern") or "").strip() or None
+
         if self._detected_season_pattern is None:
             detected = detect_season_pattern(self.active_category_folders().values())
             self._detected_season_pattern = detected or NUMERIC_ONLY
+            self.settings.set("detected_season_pattern", self._detected_season_pattern)
+            self.settings.save()   # sofort schreiben, sonst wäre es beim nächsten Start wieder weg
             if detected:
                 self.log(f"Staffel-Benennung aus der Mediathek übernommen: '{detected}'")
         return self._detected_season_pattern
@@ -1655,9 +1728,38 @@ class MainWindow(FluentWindow):
                 tr("AV1 auf dieser Grafikkarte nicht möglich"),
                 tr("{name} kann AV1 zwar abspielen, aber nicht erzeugen. Dafür "
                    "wird mindestens eine GeForce RTX der 4000er-Reihe benötigt."
-                   "\n\nH.264 funktioniert auf dieser Karte und lässt sich in den "
-                   "Einstellungen als Codec wählen.").format(name=gpu.name)
+                   "\n\nH.265 und H.264 funktionieren auf dieser Karte. H.265 "
+                   "erzeugt deutlich kleinere Dateien und ist die bessere Wahl, "
+                   "solange die Abspielgeräte es beherrschen.").format(name=gpu.name)
             )
+
+    def _on_container_changed(self):
+        """Der Container bestimmt die Endung der Zieldateien - bereits gescannte
+        Einträge müssen deshalb neu berechnet werden.
+
+        Ohne das zeigte die Liste weiterhin die alten Pfade, und die
+        Kollisionsauflösung liefe gegen Dateien, die so gar nicht entstehen."""
+        if not getattr(self, "_ui_ready", False) or not self.videos:
+            return
+
+        container = self.container_combo.currentData() or DEFAULT_CONTAINER
+        target_path = Path(self.target_input.text().strip() or ".")
+        rename_enabled = self.rename_check.isChecked()
+        category_folders = self.settings.get("category_folders") or {}
+        season_pattern = self.current_season_pattern()
+
+        for video in self.videos:
+            video.target_path = PathGenerator.generate(
+                video, target_path, rename_enabled, category_folders,
+                season_pattern, container)
+            if video.status == FileStatus.UEBERSPRUNGEN and not video.target_path.exists():
+                video.status = FileStatus.WARTEND
+            elif video.status == FileStatus.WARTEND and video.target_path.exists():
+                video.status = FileStatus.UEBERSPRUNGEN
+
+        PathGenerator.resolve_collisions(self.videos)
+        self.update_file_table()
+        self.update_details_tree()
 
     def _update_encoder_hint(self):
         """Setzt den Hinweis unter dem Zähler für parallele Tasks.
@@ -1698,8 +1800,20 @@ class MainWindow(FluentWindow):
         self.log_page.append(message)
         logger.info(message)
 
-    def update_crf_label(self, value: int, label: Optional[CaptionLabel] = None):
-        (label or self.crf_label).setText(tr("CQ {value} · {description}").format(value=value, description=tr(get_cq_description(value))))
+    def update_crf_label(self, value: int, label: Optional[CaptionLabel] = None,
+                         codec: Optional[str] = None):
+        """Beschriftet den Qualitätsregler - mit der Obergrenze des Codecs.
+
+        Ohne die Grenze wäre nicht zu sehen, dass dieselbe Zahl je nach Codec
+        etwas anderes bedeutet: AV1 rechnet auf einer Skala bis 63, H.265 und
+        H.264 nur bis 51. Wer den Codec wechselt, bekäme sonst unbemerkt eine
+        andere Qualität, obwohl der Regler unverändert steht."""
+        if codec is None:
+            codec = self.codec_combo.currentData() if hasattr(self, "codec_combo") else None
+        grenze = cq_maximum_for(codec or DEFAULT_CODEC)
+        (label or self.crf_label).setText(
+            tr("CQ {value}/{max} · {description}").format(
+                value=value, max=grenze, description=tr(get_cq_description(value))))
 
     def browse_source(self):
         start_dir = self.source_input.text().strip() or os.path.expanduser("~")
@@ -1764,15 +1878,18 @@ class MainWindow(FluentWindow):
         self.log("📋 Dateiliste geleert")
 
     def _cleanup_stale_temp_files(self, target_path: Path):
-        """Entfernt liegengebliebene '.name.tmp.mp4'-Dateien im Zielordner.
+        """Entfernt liegengebliebene '.name.tmp.<endung>'-Dateien im Zielordner.
 
         Bricht die App während eines Encodes ab (Absturz, Stromausfall), bleibt die
         angefangene Temp-Datei zurück. Sie ist wertlos - der Zielpfad entsteht erst
-        beim atomaren Umbenennen - belegt aber Platz und verwirrt beim Nachschauen."""
+        beim atomaren Umbenennen - belegt aber Platz und verwirrt beim Nachschauen.
+
+        Gesucht wird über alle Container hinweg: wer die Einstellung wechselt,
+        soll auch die Reste des vorherigen Durchlaufs loswerden."""
         if not target_path.is_dir():
             return
         removed = 0
-        for stale in target_path.rglob(".*.tmp.mp4"):
+        for stale in target_path.rglob(".*.tmp.*"):
             try:
                 stale.unlink()
                 removed += 1
@@ -1859,9 +1976,17 @@ class MainWindow(FluentWindow):
             rename_enabled=self.rename_check.isChecked(),
             enabled_categories=list(self.active_category_folders()),
             category_folders=self.settings.get("category_folders") or {},
-            configured_season_pattern=(self.settings.get("season_folder_pattern") or "").strip(),
+            # Bereits Ermitteltes weiterreichen: das Ablesen der Staffel-Benennung
+            # aus der Mediathek ist der teuerste Schritt überhaupt (bis zu 60
+            # Serienordner je Kategorie, einzeln über das Netz). Vor dem Umbau
+            # geschah das einmal je Sitzung; ohne diese Zeile bei JEDEM Scan neu.
+            configured_season_pattern=(
+                (self.settings.get("season_folder_pattern") or "").strip()
+                or self._detected_season_pattern
+                or (self.settings.get("detected_season_pattern") or "").strip()),
             ffmpeg=self.ffmpeg,
             ignored_folders=ignored_folders,
+            container=self.container_combo.currentData() or DEFAULT_CONTAINER,
         )
         self.scan_worker.progress.connect(self._on_scan_progress)
         self.scan_worker.log_message.connect(self.log)
@@ -1923,7 +2048,13 @@ class MainWindow(FluentWindow):
                 "Konvertierung gelöscht (Scannen allein ändert nichts)."
             )
 
-        self._detected_season_pattern = result.season_pattern
+        # Dauerhaft merken, nicht nur für diese Sitzung: das Ablesen kostet auf
+        # einer Mediathek im Netz mehrere Sekunden und ergibt jedes Mal
+        # dasselbe. Geleert wird der Wert, sobald die Kategorie-Ordner wechseln.
+        if result.season_pattern and result.season_pattern != self._detected_season_pattern:
+            self._detected_season_pattern = result.season_pattern
+            self.settings.set("detected_season_pattern", result.season_pattern)
+            self.settings.save()
         self.videos = result.videos
 
         # Erst jetzt, nachdem der Scan durch ist: das Aufräumen liegengebliebener
@@ -2220,6 +2351,7 @@ class MainWindow(FluentWindow):
             "codec": self.codec_combo.currentData(),
             "use_separate_presets": self.separate_presets_check.isChecked(),
             "parallel_tasks": self.parallel_spin.value(),
+            "container": self.container_combo.currentData(),
             "normalize_audio": self.normalize_check.isChecked(),
             "delete_source_after_convert": self.delete_source_check.isChecked(),
         }

@@ -10,7 +10,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from models import DEFAULT_CODEC, DEFAULT_CQ, DEFAULT_PARALLEL_TASKS, DEFAULT_PRESET, NAS_CATEGORIES
+from models import (
+    DEFAULT_CODEC, DEFAULT_CONTAINER, DEFAULT_CQ, DEFAULT_PARALLEL_TASKS,
+    DEFAULT_PRESET, NAS_CATEGORIES,
+)
 
 _APPDATA = Path(os.environ.get("APPDATA", str(Path.home())))
 CONFIG_DIR = _APPDATA / "Amboss"
@@ -27,6 +30,12 @@ DEFAULTS: Dict[str, Any] = {
     "preset": DEFAULT_PRESET,
     "parallel_tasks": DEFAULT_PARALLEL_TASKS,
     "codec": DEFAULT_CODEC,
+    "container": DEFAULT_CONTAINER,
+    # Aus der Mediathek abgelesene Staffel-Benennung. Kein Nutzer stellt das
+    # ein - es wird gemerkt, weil das Ablesen über ein Netzlaufwerk mehrere
+    # Sekunden kostet und immer dasselbe ergibt. Wird geleert, sobald sich die
+    # Kategorie-Ordner ändern.
+    "detected_season_pattern": "",
     "normalize_audio": False,
     "rename_enabled": True,
     "delete_source_after_convert": False,

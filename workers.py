@@ -13,6 +13,7 @@ Enthält gegenüber der alten Version mehrere Korrekturen:
   Konvertierung bzw. der vollständige Kopiervorgang verifiziert wurde.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -28,7 +29,11 @@ from typing import Dict, List, Optional
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from ffmpeg_processor import FFmpegProcessor
-from models import FileStatus, NASUploadItem, NASUploadStatus, VideoFile, preset_bucket_for
+from i18n import tr
+from models import (
+    VIDEO_EXTENSIONS, FileStatus, NASUploadItem, NASUploadStatus, VideoFile,
+    preset_bucket_for,
+)
 
 _CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 _TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.?\d*)")
@@ -85,6 +90,35 @@ def _keep_system_awake(active: bool) -> bool:
         return ctypes.windll.kernel32.SetThreadExecutionState(flags) != 0
     except (OSError, AttributeError):
         return False
+
+
+def _erklaere_fehler(ffmpeg_ausgabe: str, ziel: Optional[Path]) -> str:
+    """Macht aus einer FFmpeg-Fehlerausgabe eine Erklärung, mit der man etwas
+    anfangen kann.
+
+    Die rohe Ausgabe beginnt mit dem Versionsbanner und Bibliotheksnummern; in
+    der Spalte "Fehler" der Oberfläche stand davon dann eine Zeile wie
+    "libavformat 61. 7.100" - also nichts, was weiterhilft. Für die Fälle, die
+    tatsächlich vorkommen, gibt es hier einen Satz samt Ausweg."""
+    text = ffmpeg_ausgabe.lower()
+    ist_mp4 = ziel is not None and ziel.suffix.lower() == ".mp4"
+
+    if ist_mp4 and ("experimental" in text or "could not find tag" in text):
+        return tr("Diese Tonspur passt nicht in MP4 (z.B. TrueHD oder DTS-HD MA). "
+                  "Mit MKV als Container bleibt sie erhalten.")
+    if "no capable devices found" in text:
+        return tr("Die Grafikkarte unterstützt diese Kombination nicht - bei AV1 "
+                  "meist ein Video mit 4:4:4-Farbabtastung.")
+    if "no space left" in text:
+        return tr("Kein Speicherplatz mehr auf dem Ziellaufwerk.")
+    if "permission denied" in text:
+        return tr("Kein Schreibzugriff auf den Zielordner.")
+
+    # Unbekannter Fall: die letzten Zeilen zeigen, das Banner nicht.
+    zeilen = [z.strip() for z in ffmpeg_ausgabe.strip().splitlines() if z.strip()]
+    nutzbar = [z for z in zeilen
+               if not z.startswith(("ffmpeg version", "built with", "configuration:", "lib"))]
+    return (nutzbar[-1] if nutzbar else (zeilen[-1] if zeilen else tr("Unbekannter Fehler")))[:300]
 
 
 class ConversionWorker(QThread):
@@ -324,7 +358,7 @@ class ConversionWorker(QThread):
             else:
                 video.status = FileStatus.FEHLER
                 error_output = "".join(stderr_tail) or "Unbekannter Fehler"
-                video.error_message = error_output
+                video.error_message = _erklaere_fehler(error_output, video.target_path)
                 self._cleanup_temp(temp_path)
                 self.file_completed.emit(idx, False, f"FFmpeg Fehler: {process.returncode}")
                 self.log_message.emit(f"FEHLER: {error_output}")
@@ -460,7 +494,7 @@ class ScanWorker(QThread):
     def __init__(self, source_path: Path, target_path: Path, rename_enabled: bool,
                  enabled_categories: List[str], category_folders: Dict[str, str],
                  configured_season_pattern: str, ffmpeg: FFmpegProcessor,
-                 ignored_folders: List[Path], parent=None):
+                 ignored_folders: List[Path], container: str = "mp4", parent=None):
         super().__init__(parent)
         self.source_path = source_path
         self.target_path = target_path
@@ -470,6 +504,7 @@ class ScanWorker(QThread):
         self.configured_season_pattern = configured_season_pattern
         self.ffmpeg = ffmpeg
         self.ignored_folders = ignored_folders
+        self.container = container
         self._stop_requested = False
 
     def stop(self):
@@ -497,7 +532,19 @@ class ScanWorker(QThread):
         result = ScanResult()
 
         self.progress.emit(0, 0, "Dateien suchen")
-        files = list(self.source_path.rglob("*.mp4"))
+        # os.walk statt rglob: es liefert Datei- und Ordnernamen getrennt, aus
+        # dem Verzeichniseintrag selbst. rglob("*") müsste für jeden Treffer
+        # zusätzlich nachfragen, ob er eine Datei ist - auf einem Netzlaufwerk
+        # eine eigene Anfrage pro Eintrag. Ein rglob je Endung wäre noch
+        # schlechter: zwölf Durchläufe durch denselben Baum (gemessen 613 ms
+        # gegen 27 ms).
+        erlaubt = {e.lower() for e in VIDEO_EXTENSIONS}
+        files = []
+        for wurzel, _, dateinamen in os.walk(self.source_path):
+            ordner = Path(wurzel)
+            for name in dateinamen:
+                if os.path.splitext(name)[1].lower() in erlaubt:
+                    files.append(ordner / name)
         gefunden = len(files)
 
         def ist_ausgenommen(pfad: Path) -> bool:
@@ -528,11 +575,17 @@ class ScanWorker(QThread):
             result.season_pattern = self.configured_season_pattern
         else:
             self.progress.emit(0, len(files), "Mediathek lesen")
+            begonnen = time.perf_counter()
             erkannt = detect_season_pattern(self.category_folders.values())
             result.season_pattern = erkannt or NUMERIC_ONLY
+            dauer = time.perf_counter() - begonnen
             if erkannt:
                 result.log_lines.append(
-                    f"Staffel-Benennung aus der Mediathek übernommen: '{erkannt}'")
+                    f"Staffel-Benennung aus der Mediathek übernommen: '{erkannt}' "
+                    f"({dauer:.1f}s) - wird für diese Sitzung gemerkt")
+            else:
+                result.log_lines.append(
+                    f"Keine Staffel-Benennung in der Mediathek gefunden ({dauer:.1f}s)")
         if self._stop_requested:
             return result
 
@@ -546,7 +599,7 @@ class ScanWorker(QThread):
             video.media_type = fold_to_enabled(video.media_type, self.enabled_categories)
             video.target_path = PathGenerator.generate(
                 video, self.target_path, self.rename_enabled,
-                self.category_folders, result.season_pattern)
+                self.category_folders, result.season_pattern, self.container)
 
             if video.target_path.exists():
                 video.status = FileStatus.UEBERSPRUNGEN
