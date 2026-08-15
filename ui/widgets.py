@@ -111,6 +111,38 @@ def apply_page_transition(stacked) -> int:
     return angepasst
 
 
+def sync_slider_handle(slider):
+    """Setzt den Knopf sofort auf die Position, die zu Wert und Breite passt.
+
+    Nötig, weil ein Regler in einem noch ausgeblendeten Bereich mit seiner
+    Standardbreite positioniert wird. Blendet das Layout ihn später schmaler
+    ein, bleibt der Knopf dort stehen, wo er bei 640 px richtig war - gemessen
+    244 px in einem 180 px breiten Regler, also ausserhalb des Widgets. Ein
+    Fenstergrössenwechsel behebt das nicht."""
+    anpassen = getattr(slider, "_adjustHandlePos", None)
+    if anpassen is not None:
+        anpassen()
+
+
+def keep_slider_handle_in_sync(slider):
+    """Sorgt dafür, dass der Regler-Knopf auch einer Bereichsänderung folgt.
+
+    qfluentwidgets verbindet das Nachführen des Knopfes ausschließlich mit
+    `valueChanged`. Ändert sich nur das Maximum, bleibt der Wert gleich - also
+    kein Signal, also kein Bewegen. Der blaue Balken wird dagegen bei jedem
+    Neuzeichnen aus Wert und Maximum berechnet und wandert sofort. Ergebnis:
+    Balken und Knopf stehen auseinander, gemessen um bis zu 56 px.
+
+    Das betrifft jeden Regler, dessen Bereich sich zur Laufzeit ändert - bei
+    Amboss die Qualitätsregler, deren Skala vom gewählten Codec abhängt.
+    """
+    anpassen = getattr(slider, "_adjustHandlePos", None)
+    if anpassen is None:
+        return False
+    slider.rangeChanged.connect(lambda *_args: anpassen())
+    return True
+
+
 def surface_color() -> str:
     """Flächenfarbe des Inhaltsbereichs, passend zum aktuellen Design."""
     return "#272727" if isDarkTheme() else "#f9f9f9"

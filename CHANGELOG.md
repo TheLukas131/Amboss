@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-08-15
+
+### Fixed
+
+- **The quality slider's handle stayed put when the codec changed.** The filled
+  bar is redrawn from value and maximum on every repaint and moved immediately,
+  but the handle is only repositioned on a value change — switching codec
+  changes the maximum, not the value, so the two drifted apart by up to 56
+  pixels. The handle now follows a range change as well.
+- **The per-type sliders under Advanced showed the wrong scale.** They read the
+  main codec rather than their own, so selecting H.265 there displayed AV1's
+  scale of 63 next to it.
+- **Their handle could sit outside the slider entirely.** A slider laid out
+  while its panel is still hidden is positioned at the default width and never
+  corrected afterwards — measured at 244 px inside a 180 px slider.
+
 ## [1.2.0] — 2026-08-14
 
 ### Added

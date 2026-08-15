@@ -63,6 +63,7 @@ from ui.system_stats_widget import SystemStatsWidget
 from ui.widgets import (
     DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT,
     apply_page_transition, apply_scroll_refresh_rate, enforce_control_heights,
+    keep_slider_handle_in_sync, sync_slider_handle,
 )
 from workers import ConversionWorker, NASUploadWorker, ScanWorker
 from i18n import tr
@@ -294,6 +295,7 @@ class MainWindow(FluentWindow):
         slider_row = QHBoxLayout()
         slider_row.addWidget(QLabel(""))
         crf_slider = Slider(Qt.Horizontal)
+        keep_slider_handle_in_sync(crf_slider)
         crf_slider.setMinimum(20)
         crf_slider.setMaximum(51)
         crf_slider.setMinimumWidth(180)
@@ -303,7 +305,6 @@ class MainWindow(FluentWindow):
         crf_label = CaptionLabel("")
         quality_col.addWidget(crf_label)
         row.addLayout(quality_col, 2)
-        crf_slider.valueChanged.connect(lambda v, lbl=crf_label: self.update_crf_label(v, lbl))
         crf_slider.valueChanged.connect(self._on_convert_control_changed)
 
         preset_col = QVBoxLayout()
@@ -334,6 +335,14 @@ class MainWindow(FluentWindow):
         setattr(self, f"preset_combo{suffix}", preset_combo)
         setattr(self, f"codec_combo{suffix}", codec_combo)
 
+        # Erst hier verbinden, weil der Codec-Kasten dieser Zeile jetzt erst
+        # existiert. Er muss mitgegeben werden: ohne ihn fällt update_crf_label
+        # auf den Haupt-Codec zurück, und diese Zeile hat einen eigenen - dann
+        # stünde "H.265" im Kasten und die Skala von AV1 darunter.
+        crf_slider.valueChanged.connect(
+            lambda v, lbl=crf_label, cc=codec_combo:
+                self.update_crf_label(v, lbl, cc.currentData()))
+
         return row
 
     def _on_separate_presets_toggled(self, checked: bool):
@@ -344,6 +353,11 @@ class MainWindow(FluentWindow):
         for widget in (self.codec_combo, self.preset_combo, self.crf_slider):
             widget.setEnabled(not checked)
         self._refresh_encoder_availability()
+        # Beim Einblenden bekommen die Regler erst jetzt ihre echte Breite - der
+        # Knopf muss danach neu gesetzt werden, sonst steht er an der Position,
+        # die zur Breite im verborgenen Zustand gehörte.
+        if checked:
+            QTimer.singleShot(0, self._apply_cq_range)
 
     def _on_encoding_section_toggled(self, checked: bool):
         self.encoding_details_widget.setVisible(checked)
@@ -496,6 +510,7 @@ class MainWindow(FluentWindow):
         self.crf_label = CaptionLabel(tr("QUALITÄT"))
         quality_col.addWidget(self.crf_label)
         self.crf_slider = Slider(Qt.Horizontal)
+        keep_slider_handle_in_sync(self.crf_slider)
         self.crf_slider.setMinimum(20)
         self.crf_slider.setMaximum(51)
         self.crf_slider.setMinimumWidth(160)
@@ -1082,6 +1097,9 @@ class MainWindow(FluentWindow):
                 continue
             codec = (kasten.currentData() if kasten else None) or DEFAULT_CODEC
             regler.setMaximum(cq_maximum_for(codec))
+            # Auch wenn die Grenze gleich bleibt: der Knopf kann aus einer
+            # früheren, breiteren Auslegung stehengeblieben sein.
+            sync_slider_handle(regler)
             self.update_crf_label(regler.value(), beschriftung, codec)
 
     def _refresh_encoder_availability(self):
