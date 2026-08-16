@@ -5,6 +5,51 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] — 2026-08-16
+
+Nothing new to operate — the same settings do the same things. What changed is
+when the work happens and what is left behind when part of it fails.
+
+### Changed
+
+- **Finished items move to the library while the rest is still converting.**
+  The share previously sat idle for the whole batch and then worked through
+  everything at once; over a run of several hours the first movie was done long
+  before the last episode started. A folder is sent as soon as no queued file
+  still targets it, which also covers interleaved queues — series A, series B,
+  series A again. Requires *Move into library* to be selected.
+- **A source is deleted once its own output is verified**, rather than only
+  after the entire batch succeeded. Out of a season of 24 episodes where one
+  fails, 23 sources are now cleared instead of none. Both checks still have to
+  pass first, and an interrupted run still deletes nothing.
+- **Sources that failed are set aside** in `_InProgress/_Failed`, so what
+  remains in the watched folder is exactly what needs attention. A fresh scan
+  finds only those.
+- **A second instance no longer reaches for files the first one is working on.**
+  A running conversion marks its folder; another scan skips those files while
+  the mark is current and the process is alive. Files stranded by a crash become
+  visible again, and the failed-files folder is always visible.
+- **The log is English regardless of the interface language**, and no longer
+  uses emoji. It is a technical record — read when something went wrong, often
+  pasted into a search or handed to someone else — so one language serves it
+  better than two. The interface itself remains available in both. Entries that
+  carry a judgement are marked `OK:`, `ERROR:` or `WARNING:`, which can be
+  searched for and render in any font.
+
+### Added
+
+- **A report at the end of a run that had failures**, naming each file, why it
+  failed and where it now is. Previously the message listed filenames and
+  pointed at the log, which meant searching several hundred lines to find out
+  why episode 22 of 24 did not make it.
+
+### Fixed
+
+- **Confirming the media types reset every target to MP4.** The dialog
+  recalculates target paths afterwards and did so without the selected
+  container, so choosing MKV together with automatic library transfer silently
+  produced `.mp4` paths.
+
 ## [1.2.1] — 2026-08-15
 
 ### Fixed

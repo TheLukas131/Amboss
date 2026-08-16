@@ -30,8 +30,9 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from ffmpeg_processor import FFmpegProcessor
 from i18n import tr
+from run_lock import held_by_other
 from models import (
-    VIDEO_EXTENSIONS, FileStatus, NASUploadItem, NASUploadStatus, VideoFile,
+    FAILED_FOLDER_NAME, INPROGRESS_FOLDER_NAME, VIDEO_EXTENSIONS, FileStatus, NASUploadItem, NASUploadStatus, VideoFile,
     preset_bucket_for,
 )
 
@@ -154,7 +155,7 @@ class ConversionWorker(QThread):
                     _set_process_suspended(proc.pid, False)
                     proc.terminate()
                 except OSError as e:
-                    self.log_message.emit(f"Konnte Prozess nicht beenden: {e}")
+                    self.log_message.emit(f"Could not terminate process: {e}")
 
     def pause(self):
         self._pause_requested = True
@@ -184,15 +185,15 @@ class ConversionWorker(QThread):
                         future.result()
                     except Exception as e:
                         idx = futures[future]
-                        self.log_message.emit(f"Fehler bei Datei {idx}: {e}")
+                        self.log_message.emit(f"Error on file {idx}: {e}")
         except Exception as e:
-            self.log_message.emit(f"❌ Schwerer Fehler im Konvertierungs-Thread: {e}\n{traceback.format_exc()}")
+            self.log_message.emit(f"ERROR: fatal error in the conversion thread: {e}\n{traceback.format_exc()}")
         finally:
             # Erst hier, wenn das Ergebnis des gesamten Laufs feststeht.
             try:
                 self._delete_pending_sources()
             except Exception as e:  # noqa: BLE001
-                self.log_message.emit(f"Fehler beim Aufräumen der Quelldateien: {e}")
+                self.log_message.emit(f"Error while cleaning up source files: {e}")
             # Die Schlafsperre unbedingt wieder freigeben - auch nach einem
             # Abbruch, sonst bliebe der Rechner bis zum Beenden der App wach.
             _keep_system_awake(False)
@@ -229,7 +230,7 @@ class ConversionWorker(QThread):
         try:
             video.conversion_start_time = time.time()
             self.file_started.emit(idx)
-            self.progress_updated.emit(idx, 0, "Starte Konvertierung...")
+            self.progress_updated.emit(idx, 0, tr("Starte Konvertierung..."))
 
             video.target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -269,9 +270,9 @@ class ConversionWorker(QThread):
             }
 
             self.log_message.emit(
-                f"[{video.source_path.name}] Einstellungen: CQ={cq}, Preset={preset}, Codec={codec}"
+                f"[{video.source_path.name}] settings: CQ={cq}, preset={preset}, codec={codec}"
             )
-            self.log_message.emit(f"FFmpeg-Befehl: {' '.join(cmd)}")
+            self.log_message.emit(f"FFmpeg command: {' '.join(cmd)}")
 
             # Die Dauer wurde beim Scannen schon per ffprobe ermittelt - kein Grund,
             # dafür einen zweiten Prozess pro Datei zu starten.
@@ -310,7 +311,7 @@ class ConversionWorker(QThread):
                     current_time = int(h) * 3600 + int(m) * 60 + float(s)
                     if duration > 0:
                         progress = min(int((current_time / duration) * 100), 99)
-                        self.progress_updated.emit(idx, progress, f"Konvertiere... {progress}%")
+                        self.progress_updated.emit(idx, progress, tr("Konvertiere... {progress}%").format(progress=progress))
 
                 if "fps=" in line:
                     self.log_message.emit(f"[{video.source_path.name}] {line.strip()}")
@@ -341,13 +342,13 @@ class ConversionWorker(QThread):
                     self._cleanup_temp(video.target_path)
                     self.file_completed.emit(idx, False, f"Überprüfung fehlgeschlagen: {reason}")
                     self.log_message.emit(
-                        f"⚠️ [{video.source_path.name}] Zieldatei verworfen - {reason}. Quelldatei bleibt erhalten."
+                        f"WARNING: [{video.source_path.name}] output discarded - {reason}. Source file kept."
                     )
                     return
 
                 video.status = FileStatus.FERTIG
                 video.new_size = video.target_path.stat().st_size
-                self.progress_updated.emit(idx, 100, "Fertig")
+                self.progress_updated.emit(idx, 100, tr("Fertig"))
                 self.file_completed.emit(idx, True, "Erfolgreich konvertiert")
 
                 # Nicht sofort löschen - erst wenn der komplette Lauf sauber
@@ -361,13 +362,13 @@ class ConversionWorker(QThread):
                 video.error_message = _erklaere_fehler(error_output, video.target_path)
                 self._cleanup_temp(temp_path)
                 self.file_completed.emit(idx, False, f"FFmpeg Fehler: {process.returncode}")
-                self.log_message.emit(f"FEHLER: {error_output}")
+                self.log_message.emit(f"ERROR: {error_output}")
 
         except Exception as e:
             video.status = FileStatus.FEHLER
             video.error_message = str(e)
             self.file_completed.emit(idx, False, str(e))
-            self.log_message.emit(f"FEHLER: {e}")
+            self.log_message.emit(f"ERROR: {e}")
 
     def _verify_output(self, video: VideoFile, source_duration: float,
                        expected_streams: Optional[Dict[str, int]] = None):
@@ -422,12 +423,22 @@ class ConversionWorker(QThread):
         return True, ""
 
     def _delete_pending_sources(self):
-        """Löscht die Quelldateien erst ganz am Ende - und nur, wenn der gesamte
-        Lauf fehlerfrei und nicht abgebrochen war.
+        """Löscht die Quelldateien am Ende des Laufs - je Datei entschieden.
 
-        Absichtlich alles-oder-nichts: schlägt auch nur eine Datei fehl, bleiben
-        sämtliche Quelldateien liegen. Lieber einmal von Hand aufräumen als
-        feststellen, dass ausgerechnet das Original fehlt, das man noch braucht."""
+        Gelöscht wird nur, was nachweislich in Ordnung ist: die Zieldatei muss
+        die Prüfung auf Laufzeit UND Streamzahl bestanden haben, erst dann landet
+        die Quelle überhaupt in dieser Liste.
+
+        Früher galt alles-oder-nichts: eine einzige gescheiterte Datei liess
+        sämtliche Quellen liegen. Bei einer Staffel mit 24 Folgen, von denen eine
+        fehlschlägt, blieben damit 24 Originale zurück, obwohl 23 davon fertig
+        und geprüft in der Mediathek lagen. Die feinere Regel ist möglich, weil
+        die Prüfung inzwischen belastbar ist - eine Datei, die durchkommt, ist
+        vollständig, und eine, die es nicht tut, wird gar nicht erst
+        vorgemerkt.
+
+        Ein Abbruch bleibt die Ausnahme: dann wird nichts gelöscht, weil
+        unklar ist, was noch mittendrin war."""
         with self._lock:
             pending = list(self._pending_source_deletions)
             self._pending_source_deletions.clear()
@@ -435,11 +446,10 @@ class ConversionWorker(QThread):
         if not pending:
             return
 
-        failed = sum(1 for v in self.videos if v.status == FileStatus.FEHLER)
-        if self._stop_requested or failed:
-            grund = "abgebrochen" if self._stop_requested else f"{failed} Datei(en) fehlgeschlagen"
+        if self._stop_requested:
             self.log_message.emit(
-                f"🛡️ Keine Quelldatei gelöscht ({grund}) - {len(pending)} Quelldatei(en) bleiben erhalten."
+                f"No source file deleted (aborted) - "
+                f"{len(pending)} source file(s) kept."
             )
             return
 
@@ -448,12 +458,56 @@ class ConversionWorker(QThread):
             try:
                 video.source_path.unlink()
                 deleted += 1
-                self.log_message.emit(f"🗑️ [{video.source_path.name}] Quelldatei gelöscht")
+                self.log_message.emit(f"[{video.source_path.name}] source file deleted")
             except OSError as e:
                 self.log_message.emit(
-                    f"[{video.source_path.name}] Quelldatei konnte nicht gelöscht werden: {e}"
+                    f"[{video.source_path.name}] source file could not be deleted: {e}"
                 )
-        self.log_message.emit(f"🗑️ {deleted} Quelldatei(en) nach vollständigem Durchlauf gelöscht")
+        self.log_message.emit(f"Deleted {deleted} verified source file(s)")
+        self._set_aside_failed_sources()
+
+    def _set_aside_failed_sources(self):
+        """Legt die Quellen gescheiterter Dateien in einen eigenen Ordner.
+
+        Nachdem die geprüften Quellen gelöscht sind, blieben die gescheiterten
+        sonst zwischen leeren Ordnern zurück und man müsste suchen, welche es
+        waren. In `_InProgress/_Failed/` steht danach genau das, was noch
+        Aufmerksamkeit braucht - bei 24 Folgen, von denen eine misslang, ist das
+        eine Datei statt vierundzwanzig."""
+        gescheitert = [v for v in self.videos if v.status == FileStatus.FEHLER]
+        if not gescheitert or self._stop_requested:
+            return
+
+        verschoben = 0
+        for video in gescheitert:
+            quelle = video.source_path
+            if not quelle.exists():
+                continue
+            # Neben die Quelldatei, nicht in den Zielordner: die Datei ist ja
+            # nicht konvertiert, sie gehört weiterhin zum Eingang.
+            ziel_ordner = quelle.parent / FAILED_FOLDER_NAME
+            if quelle.parent.name == FAILED_FOLDER_NAME:
+                continue  # liegt schon dort, aus einem früheren Lauf
+            try:
+                ziel_ordner.mkdir(parents=True, exist_ok=True)
+                ziel = ziel_ordner / quelle.name
+                # Nicht überschreiben, falls aus einem früheren Lauf gleichnamig.
+                zaehler = 1
+                while ziel.exists():
+                    ziel = ziel_ordner / f"{quelle.stem} ({zaehler}){quelle.suffix}"
+                    zaehler += 1
+                shutil.move(str(quelle), str(ziel))
+                video.source_path = ziel
+                verschoben += 1
+            except OSError as e:
+                self.log_message.emit(
+                    f"[{quelle.name}] could not be moved to {FAILED_FOLDER_NAME}: {e}"
+                )
+
+        if verschoben:
+            self.log_message.emit(
+                f"Moved {verschoben} failed source file(s) to {FAILED_FOLDER_NAME}/"
+            )
 
     @staticmethod
     def _cleanup_temp(temp_path: Path):
@@ -519,7 +573,7 @@ class ScanWorker(QThread):
                 self.finished_ok.emit(result)
         except Exception as error:  # noqa: BLE001
             self.log_message.emit(
-                f"❌ Schwerer Fehler beim Scannen: {error}\n{traceback.format_exc()}")
+                f"ERROR: fatal error while scanning: {error}\n{traceback.format_exc()}")
             self.failed.emit(str(error))
 
     def _scan(self) -> ScanResult:
@@ -539,12 +593,41 @@ class ScanWorker(QThread):
         # schlechter: zwölf Durchläufe durch denselben Baum (gemessen 613 ms
         # gegen 27 ms).
         erlaubt = {e.lower() for e in VIDEO_EXTENSIONS}
+
+        # Arbeitet ein anderer Amboss gerade in diesem Quellordner, bleiben
+        # dessen Dateien in _InProgress aussen vor - sonst griffen zwei Läufe
+        # nach denselben. Der Unterordner mit den gescheiterten Dateien wird
+        # trotzdem gelesen, damit man sie erneut versuchen kann.
+        fremder_lauf = held_by_other(self.source_path)
+        laufend = (self.source_path / INPROGRESS_FOLDER_NAME).resolve()
+        fehler_ordner = (laufend / FAILED_FOLDER_NAME).resolve()
+
+        def gesperrt(ordner: Path) -> bool:
+            if fremder_lauf is None:
+                return False
+            try:
+                aufgeloest = ordner.resolve()
+            except OSError:
+                return False
+            if aufgeloest == fehler_ordner or fehler_ordner in aufgeloest.parents:
+                return False
+            return aufgeloest == laufend or laufend in aufgeloest.parents
+
         files = []
+        uebersprungen = 0
         for wurzel, _, dateinamen in os.walk(self.source_path):
             ordner = Path(wurzel)
+            if gesperrt(ordner):
+                uebersprungen += sum(1 for n in dateinamen
+                                     if os.path.splitext(n)[1].lower() in erlaubt)
+                continue
             for name in dateinamen:
                 if os.path.splitext(name)[1].lower() in erlaubt:
                     files.append(ordner / name)
+        if uebersprungen:
+            result.log_lines.append(
+                f"Skipped {uebersprungen} file(s) - another Amboss "
+                f"(process {fremder_lauf}) is working on them.")
         gefunden = len(files)
 
         def ist_ausgenommen(pfad: Path) -> bool:
@@ -581,11 +664,11 @@ class ScanWorker(QThread):
             dauer = time.perf_counter() - begonnen
             if erkannt:
                 result.log_lines.append(
-                    f"Staffel-Benennung aus der Mediathek übernommen: '{erkannt}' "
-                    f"({dauer:.1f}s) - wird für diese Sitzung gemerkt")
+                    f"Season naming taken from the library: '{erkannt}' "
+                    f"({dauer:.1f}s) - remembered from now on")
             else:
                 result.log_lines.append(
-                    f"Keine Staffel-Benennung in der Mediathek gefunden ({dauer:.1f}s)")
+                    f"No season naming found in the library ({dauer:.1f}s)")
         if self._stop_requested:
             return result
 
@@ -605,7 +688,7 @@ class ScanWorker(QThread):
                 video.status = FileStatus.UEBERSPRUNGEN
 
             result.videos.append(video)
-            result.log_lines.append(f"  → {datei.name} [{video.media_type.value}]")
+            result.log_lines.append(f"  -> {datei.name} [{video.media_type.value}]")
 
         if result.videos and not self._stop_requested:
             self.progress.emit(gesamt, gesamt, "Videodaten lesen")
@@ -671,18 +754,18 @@ class NASUploadWorker(QThread):
 
                 self._process_item(idx, item)
         except Exception as e:
-            self.log_message.emit(f"❌ Schwerer Fehler im NAS-Upload-Thread: {e}\n{traceback.format_exc()}")
+            self.log_message.emit(f"ERROR: fatal error in the transfer thread: {e}\n{traceback.format_exc()}")
         finally:
             try:
                 self._delete_pending_folders()
             except Exception as e:  # noqa: BLE001
-                self.log_message.emit(f"Fehler beim Aufräumen der lokalen Ordner: {e}")
+                self.log_message.emit(f"Error while cleaning up local folders: {e}")
             _keep_system_awake(False)
             self.all_completed.emit()
 
     def _process_item(self, idx: int, item: NASUploadItem):
         try:
-            self.progress_updated.emit(idx, 0, "Prüfe Zielordner...")
+            self.progress_updated.emit(idx, 0, tr("Prüfe Zielordner..."))
 
             category_root = (self.category_folders.get(item.target_category) or "").strip()
             if not category_root:
@@ -695,17 +778,17 @@ class NASUploadWorker(QThread):
                 raise ConnectionError(f"Zielordner nicht erreichbar: {category_root}")
 
             target_path = base / item.name
-            self.progress_updated.emit(idx, 10, f"Ziel: {target_path}")
-            self.log_message.emit(f"[{item.name}] Verschiebe nach: {target_path}")
+            self.progress_updated.emit(idx, 10, tr("Ziel: {path}").format(path=target_path))
+            self.log_message.emit(f"[{item.name}] moving to: {target_path}")
 
             source_file_count = sum(1 for f in item.folder_path.rglob("*") if f.is_file())
 
             if target_path.exists():
-                self.progress_updated.emit(idx, 15, "Zielordner existiert - führe zusammen...")
-                self.log_message.emit(f"[{item.name}] Zielordner existiert - führe zusammen")
+                self.progress_updated.emit(idx, 15, tr("Zielordner existiert - führe zusammen..."))
+                self.log_message.emit(f"[{item.name}] target folder exists - merging")
                 copied = self._merge_folders(item.folder_path, target_path, idx)
             else:
-                self.progress_updated.emit(idx, 20, "Kopiere Ordner...")
+                self.progress_updated.emit(idx, 20, tr("Kopiere Ordner..."))
                 copied = self._copy_folder(item.folder_path, target_path, idx)
 
             # Nur löschen, wenn die Übertragung nachweislich vollständig war -
@@ -715,23 +798,23 @@ class NASUploadWorker(QThread):
                 item.error_message = "Übertragung abgebrochen oder unvollständig"
                 self.item_completed.emit(idx, False, "Abgebrochen - lokaler Ordner NICHT gelöscht")
                 self.log_message.emit(
-                    f"[{item.name}] Übertragung unvollständig ({copied}/{source_file_count} Dateien) - kein Löschen"
+                    f"[{item.name}] transfer incomplete ({copied}/{source_file_count} files) - nothing deleted"
                 )
                 return
 
-            self.progress_updated.emit(idx, 92, "Prüfe Übertragung...")
+            self.progress_updated.emit(idx, 92, tr("Prüfe Übertragung..."))
             verified, reason = self._verify_transfer(item.folder_path, target_path)
             if not verified:
                 item.status = NASUploadStatus.FEHLER
                 item.error_message = f"Überprüfung fehlgeschlagen: {reason}"
                 self.item_completed.emit(idx, False, f"Überprüfung fehlgeschlagen - {reason}")
                 self.log_message.emit(
-                    f"[{item.name}] Überprüfung fehlgeschlagen ({reason}) - lokaler Ordner bleibt erhalten"
+                    f"[{item.name}] verification failed ({reason}) - local folder kept"
                 )
                 return
 
             item.status = NASUploadStatus.FERTIG
-            self.progress_updated.emit(idx, 100, "Fertig")
+            self.progress_updated.emit(idx, 100, tr("Fertig"))
             self.item_completed.emit(idx, True, "Erfolgreich verschoben")
 
             # Löschen erst am Ende des kompletten Uploads (siehe _delete_pending_folders).
@@ -741,9 +824,9 @@ class NASUploadWorker(QThread):
         except Exception as e:
             item.status = NASUploadStatus.FEHLER
             item.error_message = str(e)
-            self.progress_updated.emit(idx, 0, f"Fehler: {str(e)[:50]}")
+            self.progress_updated.emit(idx, 0, tr("Fehler: {reason}").format(reason=str(e)[:50]))
             self.item_completed.emit(idx, False, str(e))
-            self.log_message.emit(f"[{item.name}] FEHLER: {e}")
+            self.log_message.emit(f"[{item.name}] ERROR: {e}")
 
     def _verify_transfer(self, source: Path, target: Path):
         """Vergleicht jede Quelldatei byteweise-genau mit ihrem Gegenstück auf dem NAS.
@@ -776,16 +859,16 @@ class NASUploadWorker(QThread):
         if self._stop_requested or failed:
             grund = "abgebrochen" if self._stop_requested else f"{failed} Medium/Medien fehlgeschlagen"
             self.log_message.emit(
-                f"🛡️ Kein lokaler Ordner gelöscht ({grund}) - {len(pending)} Ordner bleiben erhalten."
+                f"No local folder deleted ({grund}) - {len(pending)} folder(s) kept."
             )
             return
 
         for item in pending:
             try:
                 shutil.rmtree(item.folder_path)
-                self.log_message.emit(f"🗑️ [{item.name}] Lokaler Ordner gelöscht")
+                self.log_message.emit(f"[{item.name}] local folder deleted")
             except OSError as e:
-                self.log_message.emit(f"[{item.name}] Lokaler Ordner konnte nicht gelöscht werden: {e}")
+                self.log_message.emit(f"[{item.name}] local folder could not be deleted: {e}")
 
     def _advance_overall_progress(self, file_size: int):
         """Aktualisiert den byte-gewichteten Gesamtfortschritt über alle Items hinweg."""
@@ -814,7 +897,7 @@ class NASUploadWorker(QThread):
                 shutil.copy2(src_file, dest_file)
                 copied_files += 1
                 progress = 20 + int((copied_files / max(total_files, 1)) * 70)
-                self.progress_updated.emit(idx, progress, f"Kopiere {copied_files}/{total_files}: {src_file.name}")
+                self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
                 self._advance_overall_progress(file_size)
 
         return copied_files
@@ -839,7 +922,7 @@ class NASUploadWorker(QThread):
                 shutil.copy2(src_file, dest_file)
                 copied_files += 1
                 progress = 15 + int((copied_files / max(total_files, 1)) * 75)
-                self.progress_updated.emit(idx, progress, f"Kopiere {copied_files}/{total_files}: {src_file.name}")
+                self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
                 self._advance_overall_progress(file_size)
 
         return copied_files

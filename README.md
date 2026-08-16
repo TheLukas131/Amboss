@@ -60,14 +60,19 @@ original audio track silently loses one. Amboss maps every audio stream
 explicitly and converts text-based subtitles to `mov_text`. Bitmap subtitle
 formats that MP4 cannot carry are skipped rather than failing the encode.
 
-**Source files are deleted only after a completely clean run.** Deletion is
-deferred until every file in the batch has finished, and each output is checked
-twice before then. Against the source duration, because a truncated encode
-produces a playable file of the wrong length that a size check does not catch.
-And against the number of streams, because a file of the correct length can
+**A source file is deleted only once its own output has been verified.** Every
+output is checked twice: against the source duration, because a truncated encode
+produces a playable file of the wrong length that a size check does not catch,
+and against the number of streams, because a file of the correct length can
 still be missing a second audio track — that failure leaves no trace in duration
 or size, and it is the one that would cost the most if the source were already
-gone. If any file fails, no source is removed.
+gone. A file that fails either check is never queued for deletion.
+
+**Sources that failed are set aside** in `_InProgress/_Failed`, and the run ends
+with a report naming each one, why it failed and where it now is. Out of a
+season of 24 episodes where one fails, exactly one file remains and a fresh scan
+finds only that one. An interrupted run deletes nothing at all, since what was
+mid-flight cannot be established.
 
 **The computer is kept awake while work is in progress.** A batch easily runs
 for hours, usually overnight. Sleep is suppressed for the duration of encoding
@@ -76,6 +81,14 @@ awake — the screen may switch off as usual.
 
 **Library uploads are verified byte-for-byte.** Every file is compared against
 its counterpart before local copies are deleted.
+
+**Finished items are moved while the rest is still converting.** With automatic
+filing selected, a folder is sent as soon as no file left in the queue targets
+it — a movie right after its own conversion, a series once its last episode is
+done, regardless of the order they were queued in. Otherwise the network share
+would sit idle for hours and then have to move everything at once. A folder
+containing a failed file is held back and goes with the transfer at the end,
+rather than putting an incomplete season into the library unannounced.
 
 **Episode information is written into the file itself.** Alongside renaming,
 each output carries `title`, `show`, `season_number` and `episode_sort` as
@@ -94,7 +107,9 @@ rather than arriving washed out.
 
 **Sources are moved to `_InProgress` when a run starts**, leaving the watched
 folder free for new downloads while encoding is under way. Scanning alone never
-moves or deletes anything.
+moves or deletes anything. A second instance scanning the same folder skips
+whatever the first one is working on, so the two never reach for the same file;
+files left behind by a crash become visible again once that instance is gone.
 
 Additionally: separate quality presets for animation and live action, remaining
 time for the whole batch derived from measured throughput, detection of duplicate

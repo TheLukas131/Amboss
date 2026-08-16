@@ -218,6 +218,40 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
             "No write access to the target folder.",
         "Unbekannter Fehler": "Unknown error",
 
+        # Fehlerbericht am Ende eines Laufs
+        "Nicht konvertierte Dateien": "Files that could not be converted",
+        "{failed} von {total} Dateien konnten nicht konvertiert werden. "
+        "Die übrigen {done} sind fertig und wurden weiterverarbeitet.\n\n"
+        "Die betroffenen Quelldateien wurden zur Seite gelegt - die übrigen "
+        "sind gelöscht, sofern das eingestellt war. Ein erneuter Scan findet "
+        "damit nur noch die hier aufgeführten.":
+            "{failed} of {total} files could not be converted. The other {done} "
+            "finished and were processed further.\n\n"
+            "Their source files have been set aside; the rest were deleted if "
+            "that was configured. A new scan will therefore find only the files "
+            "listed here.",
+        "Liegt jetzt: {path}": "Now located in: {path}",
+        "{count} Datei(en) übersprungen - ein anderer Amboss (Prozess {pid}) arbeitet gerade daran.":
+            "{count} file(s) skipped — another Amboss (process {pid}) is working on them.",
+
+        # Fortschritt in der Tabelle (Oberfläche, daher zweisprachig -
+        # das Protokoll ist dagegen bewusst durchgehend englisch)
+        "Starte Konvertierung...": "Starting conversion...",
+        "Konvertiere... {progress}%": "Converting... {progress}%",
+        "Fehler: {reason}": "Failed: {reason}",
+        "Prüfe Zielordner...": "Checking target folder...",
+        "Ziel: {path}": "Target: {path}",
+        "Zielordner existiert - führe zusammen...": "Target folder exists - merging...",
+        "Kopiere Ordner...": "Copying folder...",
+        "Kopiere {done}/{total}: {name}": "Copying {done}/{total}: {name}",
+        "Prüfe Übertragung...": "Verifying transfer...",
+
+        # Verschieben während der Konvertierung
+        "Fertig und wird schon verschoben: {name}":
+            "Finished, moving it already: {name}",
+        "Verschiebe {count} fertige(s) Medium/Medien parallel zur Konvertierung...":
+            "Moving {count} finished item(s) alongside the conversion...",
+
         # Ausgabe-Container
         "Container:": "Container:",
         "MP4 - überall abspielbar (Standard)": "MP4 - plays everywhere (default)",

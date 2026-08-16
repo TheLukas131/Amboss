@@ -69,8 +69,8 @@ def filter_duplicate_downloads(files: List[Path]) -> Tuple[List[Path], List[str]
             redundant.append(f)
             vergleich = "ist größer" if largest_size > size else "ist gleich groß"
             log_lines.append(
-                f"🗑️ Duplikat gefunden: '{f.name}' ({size:,} Bytes) - "
-                f"'{largest.name}' ({largest_size:,} Bytes) {vergleich} und wird stattdessen verwendet"
+                f"Duplicate found: '{f.name}' ({size:,} bytes) - "
+                f"'{largest.name}' ({largest_size:,} bytes) {vergleich} and will be used instead"
             )
 
     return kept, log_lines, redundant

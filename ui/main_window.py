@@ -29,6 +29,8 @@ import crash_logging
 from duplicate_detector import filter_duplicate_downloads
 from ffmpeg_processor import FFmpegProcessor
 from gpu_info import detect_gpu
+from library_dispatch import ready_folders
+from run_lock import acquire, release
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
     NUMERIC_ONLY, category_for_staging_folder, detect_season_pattern, parse_season_convention,
@@ -51,6 +53,7 @@ from path_generator import PathGenerator
 from pattern_matcher import PatternMatcher
 from settings_manager import SettingsManager
 from ui import theme
+from ui.failure_report_dialog import FailureReportDialog
 from ui.ffmpeg_download import FFmpegDownloadDialog, ask_to_download, describe_failure
 from ui.log_page import LogPage
 from ui.media_type_review_dialog import MediaTypeReviewDialog
@@ -99,6 +102,16 @@ class MainWindow(FluentWindow):
         self.nas_items: List[NASUploadItem] = []
         self.nas_worker: Optional[NASUploadWorker] = None
         self.scan_worker: Optional[ScanWorker] = None
+        # Markierung im Quellordner, solange ein Lauf aktiv ist.
+        self._locked_source: Optional[Path] = None
+        self._lock_timer = QTimer()
+        self._lock_timer.timeout.connect(self._refresh_run_lock)
+        # Vorgezogenes Verschieben: Ordner, die schon während der Konvertierung
+        # losgeschickt wurden, damit das Netzlaufwerk nicht bis zum Schluss
+        # untätig bleibt.
+        self._early_upload_worker: Optional[NASUploadWorker] = None
+        self._early_upload_queue: List[Path] = []
+        self._early_dispatched: set = set()
         # Worker-Index -> Tabellenzeile, siehe _start_nas_upload/_nas_row_for
         self._nas_row_for_worker_idx: Dict[int, int] = {}
         # Seitenwechsel-Sperre, siehe _on_stacked_page_changed
@@ -163,8 +176,8 @@ class MainWindow(FluentWindow):
         # passieren, sonst sind die Tabellen und Scrollflächen noch nicht da.
         takt, betroffen = apply_scroll_refresh_rate(self)
         seiten = apply_page_transition(self.stackedWidget)
-        self.log(f"Scroll-Takt: {takt} Bilder/s auf {betroffen} Flächen, "
-                 f"Seitenwechsel geglättet ({seiten} Seiten)")
+        self.log(f"Scroll rate: {takt} fps on {betroffen} scroll areas, "
+                 f"page transition flattened ({seiten} pages)")
 
         self._ui_ready = True
 
@@ -229,7 +242,7 @@ class MainWindow(FluentWindow):
 
     def _warn_settings_incomplete(self):
         names = ", ".join(tr(c) for c in self.settings_page.incomplete())
-        self.log(tr("Zielordner fehlt") + ": " + names)
+        self.log("Target folder missing: " + names)
         self._notify(
             tr("Zielordner fehlt"),
             tr("Für {list} ist noch kein Ordner gewählt.\n\nBitte einen Ordner angeben "
@@ -1049,9 +1062,9 @@ class MainWindow(FluentWindow):
 
         active = self.active_category_folders()
         if active:
-            self.log(f"Eingerichtet: {', '.join(f'{c} -> {p}' for c, p in active.items())}")
+            self.log(f"Configured: {', '.join(f'{c} -> {p}' for c, p in active.items())}")
         else:
-            self.log("Keine Kategorie eingerichtet - es wird nur konvertiert, nicht verschoben.")
+            self.log("No category configured - files will be converted but not moved.")
 
     def _on_settings_changed(self):
         """Wird von der Einstellungsseite bei jeder Änderung gerufen."""
@@ -1115,7 +1128,7 @@ class MainWindow(FluentWindow):
         unavailable = [c for c in codecs if not self.ffmpeg.check_encoder_available(c)]
         self.encoder_available = len(unavailable) == 0
         for codec in unavailable:
-            self.log(f"⚠️ Encoder '{codec}' ist auf diesem System nicht verfügbar!")
+            self.log(f"WARNING: encoder '{codec}' is not available on this system")
         self._update_start_button_state()
 
     def closeEvent(self, event):
@@ -1218,8 +1231,8 @@ class MainWindow(FluentWindow):
     def _on_unhandled_error(self, summary: str, full_text: str):
         """Wird von crash_logging aufgerufen, wenn eine Ausnahme abgefangen wurde,
         die die App früher kommentarlos beendet hätte."""
-        self.log(f"⚠️ Interner Fehler abgefangen: {summary}")
-        self.log(f"   Details stehen in {crash_logging.CRASH_LOG_PATH}")
+        self.log(f"WARNING: internal error caught: {summary}")
+        self.log(f"   Details in {crash_logging.CRASH_LOG_PATH}")
         for line in full_text.rstrip().splitlines():
             self.log(f"   {line}")
         try:
@@ -1267,7 +1280,7 @@ class MainWindow(FluentWindow):
             self.settings.set("detected_season_pattern", self._detected_season_pattern)
             self.settings.save()   # sofort schreiben, sonst wäre es beim nächsten Start wieder weg
             if detected:
-                self.log(f"Staffel-Benennung aus der Mediathek übernommen: '{detected}'")
+                self.log(f"Season naming taken from the library: '{detected}'")
         return self._detected_season_pattern
 
     def active_category_folders(self) -> Dict[str, str]:
@@ -1301,7 +1314,7 @@ class MainWindow(FluentWindow):
         missing = [f"{c}: {p}" for c, p in active.items() if not Path(p).exists()]
         if missing:
             self.nas_status_label.setText(f" {len(missing)} nicht erreichbar")
-            self.log("❌ Nicht erreichbare Zielordner: " + " | ".join(missing))
+            self.log("ERROR: unreachable target folders: " + " | ".join(missing))
             self._notify(
                 tr("Zielordner nicht erreichbar"),
                 tr("Diese Ordner sind gerade nicht erreichbar:\n\n{list}\n\nLiegen sie auf einem "
@@ -1310,7 +1323,7 @@ class MainWindow(FluentWindow):
             )
         else:
             self.nas_status_label.setText(f" {len(active)} Ziele erreichbar")
-            self.log("✅ Alle Zielordner erreichbar: " + ", ".join(active))
+            self.log("OK: all target folders reachable: " + ", ".join(active))
 
     def _refresh_library_after_upload(self, completed: int):
         """Liest die Liste nach einem Verschiebe-Lauf neu ein.
@@ -1325,7 +1338,7 @@ class MainWindow(FluentWindow):
         try:
             self.scan_converted_folder()
         except Exception as error:  # noqa: BLE001 - Anzeige darf nie den Lauf kippen
-            self.log(f"Mediathek-Liste konnte nicht aktualisiert werden: {error}")
+            self.log(f"Library list could not be refreshed: {error}")
 
     def scan_converted_folder(self):
         """Scannt den Converted-Ordner nach Medien.
@@ -1347,7 +1360,7 @@ class MainWindow(FluentWindow):
             self._notify(tr("Fehler"), tr("Bitte wählen Sie einen gültigen Converted-Ordner aus."))
             return
 
-        self.log(f"📂 Scanne Converted-Ordner: {source}")
+        self.log(f"Scanning converted folder: {source}")
         self.nas_items.clear()
 
         source_path = Path(source)
@@ -1384,7 +1397,7 @@ class MainWindow(FluentWindow):
         self.nas_move_selected_btn.setEnabled(total > 0)
         self.nas_move_all_btn.setEnabled(total > 0)
 
-        self.log(f"Scan abgeschlossen: {total} Medien gefunden")
+        self.log(f"Scan finished: {total} items found")
 
     def _add_nas_item(self, folder: Path, category: str, media_type: Optional[MediaType] = None,
                        has_seasons: bool = False):
@@ -1522,7 +1535,7 @@ class MainWindow(FluentWindow):
             grund = (tr("kein Zielordner eingestellt") if not active
                      else tr("nicht erreichbar: {list}").format(list=" | ".join(unreachable)))
             if skip_confirmation:
-                self.log(f"❌ Automatischer Upload abgebrochen - {grund}")
+                self.log(f"ERROR: automatic transfer aborted - {grund}")
                 self._toast_error(tr("Upload nicht möglich"), grund)
             else:
                 self._notify(tr("Upload nicht möglich"), tr("Der Upload kann nicht starten:\n\n{reason}").format(reason=grund))
@@ -1560,13 +1573,13 @@ class MainWindow(FluentWindow):
         self.nas_worker.log_message.connect(self.log)
         self.nas_worker.all_completed.connect(self.on_nas_all_completed)
 
-        self.log(f"📤 Starte NAS-Upload für {len(items)} Medien...")
+        self.log(f"Starting library transfer for {len(items)} items...")
         self.nas_worker.start()
 
     def nas_stop_upload(self):
         if self.nas_worker:
             self.nas_worker.stop()
-            self.log("⏹️ NAS-Upload wird gestoppt...")
+            self.log("Stopping library transfer...")
 
     def _nas_row_for(self, worker_idx: int) -> Optional[int]:
         """Übersetzt den Index des Workers (Position in der übergebenen Teilmenge)
@@ -1630,7 +1643,7 @@ class MainWindow(FluentWindow):
         # oder deren Verschieben fehlgeschlagen ist.
         self._refresh_library_after_upload(completed)
 
-        self.log(f"\n{'=' * 50}\nNAS-Upload abgeschlossen!\n✅ Erfolgreich: {completed}\n❌ Fehlgeschlagen: {failed}\n{'=' * 50}\n")
+        self.log(f"\n{'=' * 50}\nLibrary transfer finished\nSucceeded: {completed}\nFailed: {failed}\n{'=' * 50}\n")
 
         if failed > 0:
             self.notify_system(
@@ -1665,10 +1678,10 @@ class MainWindow(FluentWindow):
 
         self.scan_converted_folder()
         if not self.nas_items:
-            self.log("📤 Automatischer NAS-Upload: keine Medien im Converted-Ordner gefunden.")
+            self.log("Automatic transfer: no items found in the converted folder.")
             return
 
-        self.log(f"📤 Automatischer NAS-Upload nach Abschluss gestartet ({len(self.nas_items)} Medien)...")
+        self.log(f"Automatic transfer started after conversion ({len(self.nas_items)} items)...")
         # Direkt auf die NAS-Seite wechseln: der Upload läuft unbeaufsichtigt los,
         # also soll man den Fortschritt sofort sehen statt ihn suchen zu müssen.
         self.switchTo(self.nas_page)
@@ -1683,24 +1696,24 @@ class MainWindow(FluentWindow):
 
         Der sichtbare Hinweis kommt getrennt über _warn_about_missing_requirements(),
         damit kein modaler Dialog erscheint, bevor das Hauptfenster überhaupt steht."""
-        self.log("Prüfe FFmpeg und NVENC...")
+        self.log("Checking FFmpeg and NVENC...")
         self._ffmpeg_available = self.ffmpeg.is_available()
 
         if self._ffmpeg_available:
-            self.log("✅ FFmpeg gefunden")
+            self.log("OK: FFmpeg found")
         else:
-            self.log("⚠️ FFmpeg nicht gefunden! Bitte installieren.")
+            self.log("WARNING: FFmpeg not found - please install it")
 
         self._refresh_encoder_availability()
         if self.encoder_available:
-            self.log("✅ Gewählte(r) Encoder verfügbar")
+            self.log("OK: selected encoder available")
         else:
-            self.log("⚠️ Mindestens ein gewählter Encoder nicht verfügbar! Passende NVIDIA-GPU erforderlich.")
+            self.log("WARNING: at least one selected encoder is unavailable - a suitable NVIDIA GPU is required")
 
     def _offer_ffmpeg_download(self) -> bool:
         """Bietet an, FFmpeg zu holen. Gibt zurück, ob es danach da ist."""
         if not ask_to_download(self):
-            self.log(tr("FFmpeg-Download abgelehnt."))
+            self.log("FFmpeg download declined.")
             return False
 
         dialog = FFmpegDownloadDialog(self)
@@ -1709,7 +1722,7 @@ class MainWindow(FluentWindow):
             self.ffmpeg = FFmpegProcessor()
             self._ffmpeg_available = self.ffmpeg.is_available()
             if self._ffmpeg_available:
-                self.log(tr("FFmpeg eingerichtet: {path}").format(path=dialog.result_path))
+                self.log(f"FFmpeg set up: {dialog.result_path}")
                 self._refresh_encoder_availability()
                 self._update_start_button_state()
                 return True
@@ -1717,7 +1730,7 @@ class MainWindow(FluentWindow):
         if dialog.error:
             self._notify(tr("FFmpeg-Download fehlgeschlagen"), describe_failure(dialog.error))
         else:
-            self.log(tr("FFmpeg-Download abgebrochen."))
+            self.log("FFmpeg download cancelled.")
         return False
 
     def _warn_about_missing_requirements(self):
@@ -1893,7 +1906,7 @@ class MainWindow(FluentWindow):
         self._update_queue_labels()
         self._update_start_button_state()
         self.clear_list_btn.setEnabled(False)
-        self.log("📋 Dateiliste geleert")
+        self.log("File list cleared")
 
     def _cleanup_stale_temp_files(self, target_path: Path):
         """Entfernt liegengebliebene '.name.tmp.<endung>'-Dateien im Zielordner.
@@ -1914,7 +1927,7 @@ class MainWindow(FluentWindow):
             except OSError:
                 pass
         if removed:
-            self.log(f"🧹 {removed} abgebrochene Zwischendatei(en) aus einem früheren Lauf entfernt")
+            self.log(f"Removed {removed} leftover temporary file(s) from an earlier run")
 
     def _update_queue_labels(self):
         """Hält die Kopfzeile der Warteschlange und die Zusammenfassungen auf den
@@ -1972,7 +1985,7 @@ class MainWindow(FluentWindow):
             self._notify(tr("Fehler"), tr("Der angegebene Quellordner ist ungültig oder existiert nicht:\n\n{path}").format(path=source))
             return
 
-        self.log(f"Scanne Ordner: {source}")
+        self.log(f"Scanning folder: {source}")
         self.videos.clear()
         self.update_file_table()
 
@@ -2051,10 +2064,10 @@ class MainWindow(FluentWindow):
         self._set_scan_running(False)
 
         if result.ignored_count:
-            self.log(f"Gefunden: {len(result.videos)} Dateien "
-                     f"({result.ignored_count} ignoriert im Output-Ordner)")
+            self.log(f"Found: {len(result.videos)} files "
+                     f"({result.ignored_count} ignored inside the output folder)")
         else:
-            self.log(f"Gefunden: {len(result.videos)} Dateien")
+            self.log(f"Found: {len(result.videos)} files")
 
         for line in result.log_lines:
             self.log(line)
@@ -2062,8 +2075,8 @@ class MainWindow(FluentWindow):
         self._redundant_duplicates = result.redundant_duplicates
         if self._redundant_duplicates:
             self.log(
-                f"   {len(self._redundant_duplicates)} doppelte(r) Download wird beim Start der "
-                "Konvertierung gelöscht (Scannen allein ändert nichts)."
+                f"   {len(self._redundant_duplicates)} duplicate download(s) will be deleted "
+                "when the conversion starts (scanning alone changes nothing)."
             )
 
         # Dauerhaft merken, nicht nur für diese Sitzung: das Ablesen kostet auf
@@ -2139,7 +2152,7 @@ class MainWindow(FluentWindow):
         if self.worker and self.worker.isRunning():
             return
         self.videos = [v for v in self.videos if v is not video]
-        self.log(f"➖ Aus der Warteschlange entfernt: {video.source_path.name}")
+        self.log(f"Removed from the queue: {video.source_path.name}")
         self.update_file_table()
         self.update_details_tree()
         self.update_statistics()
@@ -2329,10 +2342,15 @@ class MainWindow(FluentWindow):
         if target:
             target_path = Path(target)
             rename_enabled = self.rename_check.isChecked()
+            container = self.container_combo.currentData() or DEFAULT_CONTAINER
             for video in reviewable:
                 video.target_path = PathGenerator.generate(
                     video, target_path, rename_enabled,
-                    self.settings.get("category_folders") or {}, self.current_season_pattern())
+                    self.settings.get("category_folders") or {},
+                    # Der Container muss mit: ohne ihn fällt PathGenerator auf
+                    # MP4 zurück, und eine bestätigte Kategorie hätte still alle
+                    # Zielendungen von .mkv auf .mp4 zurückgesetzt.
+                    self.current_season_pattern(), container)
             PathGenerator.resolve_collisions(self.videos)
             self.update_file_table()
 
@@ -2390,8 +2408,8 @@ class MainWindow(FluentWindow):
             self.update_file_table()
 
         self.log(
-            f"Starte Konvertierung mit Einstellungen: CQ={settings['cq']}, "
-            f"Preset={settings['preset']}, Codec={settings['codec']}, Tasks={settings['parallel_tasks']}"
+            f"Starting conversion with CQ={settings['cq']}, "
+            f"preset={settings['preset']}, codec={settings['codec']}, tasks={settings['parallel_tasks']}"
         )
 
         self.start_btn.setEnabled(False)
@@ -2403,6 +2421,9 @@ class MainWindow(FluentWindow):
         self.conversion_start_time = time.time()
         self.completed_files_durations.clear()
         self._resolution_speeds.clear()
+        # Neuer Lauf: was im vorigen schon verschoben wurde, ist hier ohne Belang.
+        self._early_dispatched.clear()
+        self._early_upload_queue.clear()
         self.eta_timer.start(1000)
 
         self.worker = ConversionWorker(self.videos, settings)
@@ -2411,6 +2432,13 @@ class MainWindow(FluentWindow):
         self.worker.file_started.connect(self.on_file_started)
         self.worker.log_message.connect(self.log)
         self.worker.all_completed.connect(self.on_all_completed)
+
+        # Markieren, dass hier gearbeitet wird - eine zweite Amboss-Instanz
+        # greift dann beim Scannen nicht nach denselben Dateien.
+        self._locked_source = Path(self.source_input.text().strip() or ".")
+        acquire(self._locked_source)
+        self._lock_timer.start(30_000)
+
         self.worker.start()
         self._update_remove_buttons_enabled()
 
@@ -2420,15 +2448,15 @@ class MainWindow(FluentWindow):
         if self.worker.is_paused():
             self.worker.resume()
             self.pause_btn.setText(tr("Pause"))
-            self.log("▶️ Konvertierung fortgesetzt")
+            self.log("Conversion resumed")
         else:
             self.worker.pause()
             self.pause_btn.setText(tr("Fortsetzen"))
-            self.log("⏸️ Konvertierung pausiert")
+            self.log("Conversion paused")
 
     def stop_conversion(self):
         if self.worker:
-            self.log("Stoppe Konvertierung...")
+            self.log("Stopping conversion...")
             self.worker.stop()
 
     def on_file_started(self, file_index: int):
@@ -2495,7 +2523,90 @@ class MainWindow(FluentWindow):
             self.update_statistics()
             self.update_total_progress()
             self._update_queue_labels()
-            self.log(f"{'✅' if success else '❌'} [{video.source_path.name}] {message}")
+            self.log(f"{'' if success else ''} [{video.source_path.name}] {message}")
+
+            self._dispatch_finished_media()
+
+    # =========================================================================
+    # Verschieben während des Laufs
+    # =========================================================================
+
+    def _dispatch_finished_media(self):
+        """Schickt fertige Medienordner schon los, während der Rest noch rendert.
+
+        Ohne das steht das Netzlaufwerk die ganze Konvertierung über still und
+        arbeitet erst danach - bei einem Stapel über mehrere Stunden ist der
+        erste Film längst fertig, während der letzte noch läuft.
+
+        Verschoben wird ein Ordner erst, wenn keine offene Datei mehr auf ihn
+        zielt (siehe library_dispatch). Alles andere wäre gefährlich: der Upload
+        bewegt ganze Serienordner, zählt zu Beginn deren Dateien und löscht sie
+        anschliessend - käme währenddessen eine Folge dazu, schlüge die
+        Vollständigkeitsprüfung fehl oder der Ordner verschwände unter dem
+        laufenden Konverter weg."""
+        if not self._post_nas_enabled():
+            return
+        if not (self.worker and self.worker.isRunning()):
+            return
+        # Nicht dazwischenfunken, wenn der Nutzer selbst einen Upload angestossen hat.
+        if self.nas_worker and self.nas_worker.isRunning():
+            return
+
+        ziel = Path(self.target_input.text().strip() or ".")
+        frei = ready_folders(self.videos, ziel, self._early_dispatched)
+        if not frei:
+            return
+
+        for ordner in frei:
+            self._early_dispatched.add(ordner)
+            self._early_upload_queue.append(ordner)
+            self.log(f"Finished, moving it already: {ordner.name}")
+
+        self._start_early_upload()
+
+    def _start_early_upload(self):
+        """Startet den nächsten vorgezogenen Upload, falls gerade keiner läuft."""
+        if self._early_upload_worker and self._early_upload_worker.isRunning():
+            return
+        if not self._early_upload_queue:
+            return
+
+        kategorien = self.settings.get("category_folders") or {}
+        items = []
+        while self._early_upload_queue:
+            ordner = self._early_upload_queue.pop(0)
+            if not ordner.is_dir():
+                continue
+            kategorie = category_for_staging_folder(ordner.parent.name, kategorien)
+            if not kategorie:
+                continue
+            media_type = (MediaType(kategorie) if kategorie in [m.value for m in MediaType]
+                          else MediaType.UNBEKANNT)
+            items.append(NASUploadItem(
+                folder_path=ordner, name=ordner.name, media_type=media_type,
+                target_category=kategorie,
+                has_season_folders=kategorie in (MediaType.ANIME.value, MediaType.SERIEN.value),
+            ))
+
+        if not items:
+            return
+
+        self._early_upload_worker = NASUploadWorker(
+            items, self.active_category_folders(), self.nas_delete_check.isChecked())
+        self._early_upload_worker.log_message.connect(self.log)
+        self._early_upload_worker.all_completed.connect(self._on_early_upload_done)
+        self.log(f"Moving {len(items)} finished item(s) alongside the conversion...")
+        self._early_upload_worker.start()
+
+    def _refresh_run_lock(self):
+        """Hält die Markierung frisch. Bleibt sie stehen, weil das Programm
+        abstürzt, veraltet sie und der nächste Scan liest den Ordner wieder."""
+        if self._locked_source is not None:
+            acquire(self._locked_source)
+
+    def _on_early_upload_done(self):
+        # Falls währenddessen weitere Ordner fertig geworden sind: gleich weiter.
+        self._start_early_upload()
 
     def _record_speed_sample(self, video: VideoFile, wall_time: float):
         """Merkt sich, wie viele Video-Sekunden pro Wanduhr-Sekunde diese Auflösung
@@ -2645,6 +2756,11 @@ class MainWindow(FluentWindow):
         # Muss VOR dem Nullsetzen von self.worker gelesen werden.
         was_stopped = bool(self.worker and self.worker._stop_requested)
 
+        self._lock_timer.stop()
+        if self._locked_source is not None:
+            release(self._locked_source)
+            self._locked_source = None
+
         # Erst hier auf None setzen (nicht nur run() beendet, sondern für alle
         # anderen Stellen inkl. update_statistics() wirklich "nicht mehr aktiv") -
         # QThread.isRunning() kann sonst kurz nach dem all_completed-Signal noch
@@ -2679,8 +2795,8 @@ class MainWindow(FluentWindow):
             )
 
         self.log(
-            f"\n{'=' * 50}\nKonvertierung abgeschlossen!\n Erfolgreich: {completed}\n"
-            f"Fehlgeschlagen: {failed}{savings_line}\n{'=' * 50}\n"
+            f"\n{'=' * 50}\nConversion finished\nSucceeded: {completed}\n"
+            f"Failed: {failed}{savings_line}\n{'=' * 50}\n"
         )
 
         self.update_details_tree()
@@ -2694,21 +2810,17 @@ class MainWindow(FluentWindow):
             prune_empty_inprogress_dirs(Path(os.path.normpath(source)))
 
         if failed > 0:
-            failed_files = [v.source_path.name for v in self.videos if v.status == FileStatus.FEHLER]
-            failed_list = "\n".join(f"• {f}" for f in failed_files[:10])
-            if len(failed_files) > 10:
-                failed_list += f"\n... und {len(failed_files) - 10} weitere"
             self.notify_system(
                 tr("Konvertierung mit Fehlern abgeschlossen"),
                 tr("{done} erfolgreich, {failed} fehlgeschlagen. Details im Protokoll.")
                 .format(done=completed, failed=failed),
                 warning=True,
             )
-            self._notify(
-                tr("Konvertierung mit Fehlern abgeschlossen"),
-                tr("{count} Datei(en) konnten nicht konvertiert werden:\n\n{list}\n\n"
-                   "Überprüfen Sie das Protokoll für Details.").format(count=failed, list=failed_list)
-            )
+            # Eigener Bericht statt einer blossen Namensliste: bei einer Staffel
+            # mit 24 Folgen hilft "Folge 22 ist fehlgeschlagen" wenig, wenn
+            # weder der Grund noch der Ablageort dabeisteht.
+            gescheitert = [v for v in self.videos if v.status == FileStatus.FEHLER]
+            FailureReportDialog(gescheitert, completed, self).exec()
         else:
             saving_text = savings_line.replace("\n", " ").strip() or ""
             self.notify_system(
@@ -2742,7 +2854,7 @@ class MainWindow(FluentWindow):
             candidates.extend(find_truncation_candidates(target_path / category))
 
         if candidates:
-            self.log(f"🔎 {len(candidates)} möglicher/mögliche Namens-Duplikat(e) durch Abschneidung gefunden")
+            self.log(f"Found {len(candidates)} possible truncated-name duplicate(s)")
             dialog = MergeReviewDialog(candidates, self)
             dialog.exec_()
 

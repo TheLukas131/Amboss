@@ -7,13 +7,22 @@ from typing import Optional
 
 APP_NAME = "Amboss"
 APP_TAGLINE = "Konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 DEFAULT_CQ = 37
 DEFAULT_PRESET = "p5"
 DEFAULT_PARALLEL_TASKS = 3
 DEFAULT_OUTPUT_FOLDER = "Converted"
 INPROGRESS_FOLDER_NAME = "_InProgress"
+# Quellen, deren Konvertierung fehlschlug, landen hier - getrennt von denen, die
+# noch anstehen. Nach einem Lauf steht in diesem Ordner genau das, was
+# Aufmerksamkeit braucht.
+#
+# Englisch wie alle anderen von der Anwendung angelegten Ordner ("Converted",
+# "_InProgress", "_Unknown_Format"): ein Ordnername ist kein Oberflächentext,
+# er wandert mit der Datei und wird auch von Nutzern gesehen, die die
+# Anwendung auf Englisch bedienen.
+FAILED_FOLDER_NAME = "_Failed"
 DEFAULT_CODEC = "av1_nvenc"
 # Bewusst kein voreingestellter Netzwerkpfad: der Zielordner wird beim ersten
 # Start in der Oberfläche gewählt, und aus dessen Unterordnern leitet die App

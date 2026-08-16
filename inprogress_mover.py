@@ -40,7 +40,7 @@ def move_videos_to_inprogress(videos: List[VideoFile], source_root: Path) -> Lis
         new_path = inprogress_root / rel
         if new_path.exists():
             log_lines.append(
-                f"⚠️ [{old_path.name}] liegt bereits in {INPROGRESS_FOLDER_NAME} - übersprungen"
+                f"WARNING: [{old_path.name}] is already in {INPROGRESS_FOLDER_NAME} - skipped"
             )
             continue
 
@@ -48,11 +48,11 @@ def move_videos_to_inprogress(videos: List[VideoFile], source_root: Path) -> Lis
         try:
             shutil.move(str(old_path), str(new_path))
         except OSError as e:
-            log_lines.append(f"⚠️ [{old_path.name}] konnte nicht nach {INPROGRESS_FOLDER_NAME} verschoben werden: {e}")
+            log_lines.append(f"WARNING: [{old_path.name}] could not be moved to {INPROGRESS_FOLDER_NAME}: {e}")
             continue
 
         video.source_path = new_path
-        log_lines.append(f"📦 [{old_path.name}] → {INPROGRESS_FOLDER_NAME}/")
+        log_lines.append(f"[{old_path.name}] -> {INPROGRESS_FOLDER_NAME}/")
 
     return log_lines
 
@@ -71,9 +71,9 @@ def delete_redundant_duplicates(paths: List[Path]) -> List[str]:
                 continue
             size = path.stat().st_size
             path.unlink()
-            log_lines.append(f"🗑️ Doppelten Download gelöscht: '{path.name}' ({size:,} Bytes)")
+            log_lines.append(f"Deleted duplicate download: '{path.name}' ({size:,} bytes)")
         except OSError as e:
-            log_lines.append(f"⚠️ Doppelter Download '{path.name}' konnte nicht gelöscht werden: {e}")
+            log_lines.append(f"WARNING: duplicate download '{path.name}' could not be deleted: {e}")
     return log_lines
 
 
