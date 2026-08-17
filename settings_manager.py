@@ -66,6 +66,15 @@ DEFAULTS: Dict[str, Any] = {
     "cq_realfilm": DEFAULT_CQ,
     "preset_realfilm": DEFAULT_PRESET,
     "codec_realfilm": DEFAULT_CODEC,
+    # Beim Start bei GitHub nachfragen, ob es eine neuere Fassung gibt. An,
+    # weil eine Fehlerbehebung nur nützt, wenn sie ankommt - abschaltbar, weil
+    # ein Programm, das ungefragt ins Netz greift, das mindestens erklären und
+    # zulassen muss, dass man es unterbindet.
+    "check_for_updates": True,
+    # Fassung, die der Nutzer nicht mehr gemeldet bekommen möchte. Eine
+    # bestimmte, nicht "alle künftigen": erscheint später eine neuere, wird die
+    # wieder gemeldet.
+    "skipped_version": "",
 }
 
 # Absichtlich NICHT in DEFAULTS/config.json: "PC nach Abschluss herunterfahren"

@@ -63,6 +63,7 @@ from ui.settings_page import SettingsPage
 from ui.setup_dialog import SetupDialog
 from ui.shutdown_countdown_dialog import ShutdownCountdownDialog
 from ui.system_stats_widget import SystemStatsWidget
+from ui.update_notice import UpdateCheckThread, UpdateDialog, open_releases_page
 from ui.widgets import (
     DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT,
     apply_page_transition, apply_scroll_refresh_rate, enforce_control_heights,
@@ -172,6 +173,14 @@ class MainWindow(FluentWindow):
             QTimer.singleShot(0, self._run_first_time_setup)
         QTimer.singleShot(0, self._warn_about_missing_requirements)
 
+        # Die Update-Prüfung wird erst am Ende von
+        # _warn_about_missing_requirements angestoßen - sie ist die
+        # unwichtigste Meldung beim Start und darf keiner anderen zuvorkommen.
+        # Ein Timer von hier aus würde mitten in einen noch offenen
+        # FFmpeg-Hinweis feuern, denn dessen modaler Dialog hält eine eigene
+        # Ereignisschleife am Laufen, in der Timer weiterlaufen.
+        self._update_thread: Optional[UpdateCheckThread] = None
+
         # Scroll-Takt an den Monitor anpassen. Muss nach dem Aufbau aller Seiten
         # passieren, sonst sind die Tabellen und Scrollflächen noch nicht da.
         takt, betroffen = apply_scroll_refresh_rate(self)
@@ -191,6 +200,7 @@ class MainWindow(FluentWindow):
         self.log_page = LogPage()
         self.nas_page = self._build_nas_page()
         self.settings_page = SettingsPage(self._build_theme_toggle, self._on_settings_changed)
+        self.settings_page.check_now_requested.connect(self._check_for_updates_now)
 
         # Dauerhaft ausgeklappte Seitenleiste statt der schmalen Icon-Leiste -
         # nur so ist unten Platz für das GPU-Panel. setExpandWidth() setzt
@@ -1009,6 +1019,7 @@ class MainWindow(FluentWindow):
 
         self.settings_page.set_category_folders(self.settings.get("category_folders"))
         self.settings_page.set_language(self.settings.get("language"))
+        self.settings_page.set_check_for_updates(self.settings.get("check_for_updates"))
         self._refresh_nas_targets_label()
 
         source_folder = self.settings.get("source_folder")
@@ -1035,6 +1046,7 @@ class MainWindow(FluentWindow):
             "target_folder": self.target_input.text().strip(),
             "category_folders": self.settings_page.category_folders(),
             "language": self.settings_page.language(),
+            "check_for_updates": self.settings_page.check_for_updates(),
         }
         for bucket in PRESET_BUCKETS:
             values[f"cq_{bucket}"] = getattr(self, f"crf_slider_{bucket}").value()
@@ -1160,6 +1172,11 @@ class MainWindow(FluentWindow):
 
         self.gpu_monitor.stop()
         self.gpu_monitor.wait(2000)
+        # Die Update-Abfrage hat keinen Abbruch - sie hängt in einer
+        # Netzwerkanfrage mit knappem Zeitlimit. Kurz warten reicht; Qt beendet
+        # sonst einen noch laufenden Thread und meldet das als Absturz.
+        if self._update_thread and self._update_thread.isRunning():
+            self._update_thread.wait(2000)
         if self.tray_icon:
             self.tray_icon.hide()
         self._save_current_settings()
@@ -1573,6 +1590,7 @@ class MainWindow(FluentWindow):
         self.nas_worker.log_message.connect(self.log)
         self.nas_worker.all_completed.connect(self.on_nas_all_completed)
 
+        self.nas_progress.setValue(0)
         self.log(f"Starting library transfer for {len(items)} items...")
         self.nas_worker.start()
 
@@ -1627,6 +1645,7 @@ class MainWindow(FluentWindow):
                     status_item.setToolTip(message)
 
     def on_nas_all_completed(self):
+        self._settle_transfer_progress()
         self.nas_move_selected_btn.setEnabled(True)
         self.nas_move_all_btn.setEnabled(True)
         self.nas_stop_btn.setEnabled(False)
@@ -1733,6 +1752,64 @@ class MainWindow(FluentWindow):
             self.log("FFmpeg download cancelled.")
         return False
 
+    # =========================================================================
+    # Update-Prüfung
+    # =========================================================================
+
+    def _check_for_updates(self, manual: bool = False):
+        """Fragt bei GitHub nach neueren Fassungen - im Hintergrund.
+
+        Heruntergeladen wird nichts; gefunden wird nur, ob es etwas Neues gibt.
+        Bei der automatischen Prüfung bleibt ein Fehlschlag still: kein Netz zu
+        haben ist kein Fehler, über den man beim Start unterrichtet werden
+        möchte. Die manuelle Suche sagt dagegen in jedem Fall etwas, sonst
+        wüsste niemand, ob der Knopf überhaupt etwas getan hat."""
+        if self._update_thread is not None and self._update_thread.isRunning():
+            return
+
+        # Bei der manuellen Suche zählt die übersprungene Fassung nicht: wer
+        # ausdrücklich nachfragt, will die Antwort, nicht seine frühere
+        # Ablehnung bestätigt bekommen.
+        skipped = "" if manual else (self.settings.get("skipped_version") or "")
+
+        self.log("Checking for updates...")
+        self._update_thread = UpdateCheckThread(APP_VERSION, skipped, self)
+        self._update_thread.found.connect(self._on_update_found)
+        if manual:
+            self.settings_page.set_update_status(tr("Wird gesucht..."), busy=True)
+            self._update_thread.finished_check.connect(self._on_manual_check_done)
+        self._update_thread.start()
+
+    def _check_for_updates_now(self):
+        self._check_for_updates(manual=True)
+
+    def _on_manual_check_done(self, info):
+        """Ergebnis der ausdrücklich angestoßenen Suche auf der Einstellungsseite."""
+        if info is None:
+            self.settings_page.set_update_status(
+                tr("Amboss {version} ist die neueste Fassung.").format(version=APP_VERSION))
+            self.log("Update check: no newer version available.")
+        else:
+            self.settings_page.set_update_status(
+                tr("Version {version} ist verfügbar.").format(version=info.version))
+
+    def _on_update_found(self, info):
+        """Zeigt die neuen Fassungen an. Der Download bleibt Sache des Nutzers."""
+        self.log(f"Update available: {info.version} (running {APP_VERSION}), "
+                 f"{len(info.releases)} release(s) since")
+
+        dialog = UpdateDialog(info, APP_VERSION, self)
+        oeffnen = bool(dialog.exec())
+
+        if dialog.skip_requested():
+            self.settings.set("skipped_version", info.version)
+            self.settings.save()
+            self.log(f"Update {info.version} will not be reported again.")
+
+        if oeffnen:
+            open_releases_page(info)
+            self.log("Opened the releases page in the browser.")
+
     def _warn_about_missing_requirements(self):
         """Hinweis auf fehlende Voraussetzungen, nachdem das Fenster steht."""
         if not getattr(self, "_ffmpeg_available", True):
@@ -1763,6 +1840,12 @@ class MainWindow(FluentWindow):
                    "erzeugt deutlich kleinere Dateien und ist die bessere Wahl, "
                    "solange die Abspielgeräte es beherrschen.").format(name=gpu.name)
             )
+
+        # Jetzt erst, mit allen Hinweisen vom Tisch: nach einer neueren Fassung
+        # sehen. Beim allerersten Start entfällt das - wer die Anwendung gerade
+        # eingerichtet hat, braucht als Nächstes keinen Hinweis auf ein Update.
+        if self.settings.get("check_for_updates") and not self.settings.is_first_run:
+            QTimer.singleShot(1200, self._check_for_updates)
 
     def _on_container_changed(self):
         """Der Container bestimmt die Endung der Zieldateien - bereits gescannte
@@ -2595,8 +2678,25 @@ class MainWindow(FluentWindow):
             items, self.active_category_folders(), self.nas_delete_check.isChecked())
         self._early_upload_worker.log_message.connect(self.log)
         self._early_upload_worker.all_completed.connect(self._on_early_upload_done)
+        # Auch der vorgezogene Upload gehört an den Fortschrittsbalken. Ohne das
+        # blieb er auf dem Stand stehen, den ein früherer Vorgang hinterlassen
+        # hatte - und wirkte hängen, obwohl längst alles übertragen war.
+        self._early_upload_worker.total_progress_updated.connect(self.nas_progress.setValue)
+        self.nas_progress.setValue(0)
         self.log(f"Moving {len(items)} finished item(s) alongside the conversion...")
         self._early_upload_worker.start()
+
+    def _settle_transfer_progress(self):
+        """Bringt den Fortschrittsbalken auf einen ehrlichen Endstand.
+
+        Ein Balken, der nach getaner Arbeit bei 30 % stehenbleibt, sieht aus wie
+        ein hängender Vorgang. Läuft nichts mehr und ist auch nichts mehr
+        vorgemerkt, gehört er auf 100."""
+        laeuft = ((self._early_upload_worker and self._early_upload_worker.isRunning())
+                  or (self.nas_worker and self.nas_worker.isRunning())
+                  or bool(self._early_upload_queue))
+        if not laeuft:
+            self.nas_progress.setValue(100)
 
     def _refresh_run_lock(self):
         """Hält die Markierung frisch. Bleibt sie stehen, weil das Programm
@@ -2607,6 +2707,7 @@ class MainWindow(FluentWindow):
     def _on_early_upload_done(self):
         # Falls währenddessen weitere Ordner fertig geworden sind: gleich weiter.
         self._start_early_upload()
+        self._settle_transfer_progress()
 
     def _record_speed_sample(self, video: VideoFile, wall_time: float):
         """Merkt sich, wie viele Video-Sekunden pro Wanduhr-Sekunde diese Auflösung

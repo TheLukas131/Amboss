@@ -111,6 +111,16 @@ moves or deletes anything. A second instance scanning the same folder skips
 whatever the first one is working on, so the two never reach for the same file;
 files left behind by a crash become visible again once that instance is gone.
 
+**New versions are announced, never installed.** At startup Amboss asks GitHub
+whether anything newer has been published and, if so, shows what changed in
+every version since the installed one — going from 1.2.3 to 1.4.0 means 1.2.4
+and 1.3.0 were never seen, and the fix that matters may be in one of them. The
+button opens the releases page in a browser; the file is downloaded and put in
+place by hand. Nothing is fetched automatically and the running executable is
+never replaced underneath itself. A single version can be dismissed for good, or
+the check turned off entirely under Settings. See
+[Update check](#update-check) for what is transmitted.
+
 Additionally: separate quality presets for animation and live action, remaining
 time for the whole batch derived from measured throughput, detection of duplicate
 downloads (`File.mp4` alongside `File (1).mp4`), a Windows notification on
@@ -283,6 +293,31 @@ One option is deliberately not persisted: *shut down PC when finished* resets on
 every launch, so a forgotten checkbox cannot power off the machine during a later
 session.
 
+### Update check
+
+Amboss makes exactly one kind of network request on its own: at startup it asks
+`api.github.com` for this repository's published releases, to find out whether
+anything newer than the running version exists. It is a plain unauthenticated
+GET; nothing is sent along with it — no identifier, no machine details, no usage
+data — and nothing is written anywhere but the two settings below. Turning the
+check off means no request is made at all.
+
+| Setting | Meaning |
+|---|---|
+| *Check for new versions at startup* | On by default. Off means Amboss never contacts the network by itself. |
+| *Stop reminding me about X* | Suppresses one particular version. A later, higher version is reported again. |
+
+The check is skipped on first run, fails silently when there is no connection,
+and never blocks the interface. *Check now* under Settings runs it on demand and
+ignores a previously dismissed version — an explicit question deserves the real
+answer.
+
+Downloading and replacing `Amboss.exe` remains a manual step. Windows will not
+let a running executable overwrite itself, so a self-update would have to swap
+the file during the next start, which is exactly the behaviour antivirus
+software treats as malicious in an unsigned program. For a tool that deletes
+source files, being predictable is worth more than being convenient.
+
 ## Project layout
 
 | File | Purpose |
@@ -297,6 +332,7 @@ session.
 | `library_layout.py` | Reads folder conventions from the existing library |
 | `ffmpeg_processor.py` | FFmpeg and FFprobe invocation |
 | `workers.py` | Conversion and upload, off the UI thread |
+| `update_check.py` | Asks GitHub whether a newer version exists |
 | `i18n.py` | Interface translations |
 | `ui/` | User interface |
 

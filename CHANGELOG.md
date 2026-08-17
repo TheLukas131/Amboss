@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] — 2026-08-17
+
+### Added
+
+- **Amboss says when a new version has been published.** Until now a release
+  reached nobody who was not watching the repository, which makes a fix worth
+  little. At startup Amboss asks GitHub what has been released and, if
+  something newer exists, shows what changed — in *every* version since the
+  installed one, not only the latest. Going from 1.2.3 to 1.4.0 means 1.2.4 and
+  1.3.0 were never seen, and the entry that matters may well be in one of them;
+  the list scrolls, the button always leads to the newest version.
+
+  Nothing is downloaded and nothing is replaced. Windows will not let a running
+  executable overwrite itself, so a self-update would have to swap the file
+  during the next start — precisely the behaviour antivirus software treats as
+  malicious in an unsigned program. For a tool that deletes source files,
+  predictability is worth more than convenience.
+
+  The request is a plain unauthenticated GET to `api.github.com`; nothing
+  accompanies it — no identifier, no machine details, no usage data. A single
+  version can be dismissed for good, the check can be switched off entirely,
+  and *Check now* under Settings runs it on demand, ignoring an earlier
+  dismissal. It is skipped on first run and fails silently without a
+  connection.
+
+### Fixed
+
+- **The transfer progress bar could sit at a partial value after everything had
+  been moved.** Folders sent during the run were not connected to it, so it
+  showed whatever an earlier transfer had left behind — and a bar stuck at 30 %
+  reads as a stalled job even when the work is done. It now follows both kinds
+  of transfer and settles at 100 % once nothing is left to move.
+
 ## [1.2.2] — 2026-08-16
 
 Nothing new to operate — the same settings do the same things. What changed is

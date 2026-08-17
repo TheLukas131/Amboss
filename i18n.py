@@ -576,6 +576,38 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Serien im Anime-Stil": "Animated series",
         "Filme im Anime-Stil - weglassen, wenn nicht getrennt geführt":
             "Animated movies - leave out if you don't keep them separately",
+
+        # --- Update-Prüfung ---
+        "Beim Start nach neuen Versionen suchen": "Check for new versions at startup",
+        "Jetzt suchen": "Check now",
+        "Fragt bei GitHub nach der neuesten Version. Heruntergeladen wird "
+        "nichts - gemeldet wird nur, dass es etwas Neues gibt, mit einem "
+        "Verweis auf die Projektseite. Übertragen wird dabei nichts außer "
+        "der Anfrage selbst.":
+            "Asks GitHub for the latest version. Nothing is downloaded - you are "
+            "only told that something newer exists, with a link to the project "
+            "page. Nothing is transmitted beyond the request itself.",
+        "Wird gesucht...": "Checking...",
+        "Amboss {version} ist die neueste Fassung.": "Amboss {version} is the latest version.",
+        "Version {version} ist verfügbar.": "Version {version} is available.",
+        "Neue Version verfügbar": "New version available",
+        "Amboss {new} ist erschienen. Installiert ist {current}.":
+            "Amboss {new} has been released. You are running {current}.",
+        "Amboss {new} ist erschienen, installiert ist {current}. "
+        "Dazwischen liegen {count} Fassungen:":
+            "Amboss {new} has been released, you are running {current}. "
+            "{count} versions lie in between:",
+        "Amboss lädt nichts von selbst herunter. Der Knopf öffnet die "
+        "Projektseite im Browser; dort liegt die neueste Fassung zum "
+        "Herunterladen.":
+            "Amboss downloads nothing on its own. The button opens the project "
+            "page in your browser, where the latest version is available for "
+            "download.",
+        "Nicht mehr an {version} erinnern": "Stop reminding me about {version}",
+        "Zur Download-Seite": "Go to the download page",
+        "Später": "Later",
+        "Keine Angaben zu dieser Fassung.": "No notes for this version.",
+        "... weiteres auf der Projektseite": "... more on the project page",
     }
 }
 

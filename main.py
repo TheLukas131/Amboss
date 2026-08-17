@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Amboss - konvertiert Videos nach AV1 & H.264 über NVIDIA NVENC.
+"""Amboss - konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC.
 
 Erkennt Serien, Anime und Filme am Dateinamen, sortiert sie in eine
 passende Ordnerstruktur und schiebt sie auf Wunsch in die Mediathek.
 
-Version: 1.0.0
+Die Versionsnummer steht in models.APP_VERSION. Hier stand sie einmal
+zusätzlich und blieb prompt auf 1.0.0 stehen.
+
 Lizenz: GPLv3 (siehe LICENSE) - die Anwendung bindet PyQt5 und
 PyQt-Fluent-Widgets ein, die beide unter der GPLv3 stehen.
 """

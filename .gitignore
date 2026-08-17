@@ -3,6 +3,10 @@ build/
 dist/
 dist_new/
 
+# Wird beim Bauen aus models.APP_VERSION erzeugt (siehe amboss.spec).
+# Mitversioniert stand hier zuletzt 1.0.0, waehrend die Anwendung bei 1.2.2 war.
+version_info.txt
+
 # Python
 __pycache__/
 *.py[cod]

@@ -12,9 +12,11 @@ Einrichtungsdialog beim ersten Start gebraucht werden.
 
 from typing import Callable, Dict
 
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, ComboBox, PushButton, StrongBodyLabel, TitleLabel,
+    BodyLabel, CaptionLabel, CardWidget, CheckBox, ComboBox, PushButton,
+    StrongBodyLabel, TitleLabel,
 )
 
 from i18n import tr
@@ -32,6 +34,10 @@ LANGUAGE_OPTIONS = [
 
 class SettingsPage(ScrollablePage):
     """Alles, was man einmal einstellt und dann in Ruhe lässt."""
+
+    # Der Nutzer hat "Jetzt nach Updates suchen" gedrückt. Die Prüfung selbst
+    # gehört ins Hauptfenster, das den Thread und den Dialog verwaltet.
+    check_now_requested = pyqtSignal()
 
     def __init__(self, theme_toggle_builder: Callable[[], QHBoxLayout],
                  on_changed: Callable[[], None], parent=None):
@@ -110,6 +116,36 @@ class SettingsPage(ScrollablePage):
         version_row.addWidget(self.changelog_btn)
         about.addLayout(version_row)
 
+        # --- Updates ---
+        #
+        # Die Prüfung ist eine Nachfrage, kein Download: Amboss holt nie selbst
+        # eine neue Fassung und tauscht sich nicht aus. Der Hinweis darunter
+        # sagt genau das - und was dabei übertragen wird, nämlich nichts außer
+        # der Anfrage.
+        update_row = QHBoxLayout()
+        self.update_check_box = CheckBox(tr("Beim Start nach neuen Versionen suchen"))
+        self.update_check_box.stateChanged.connect(lambda _s: self._on_changed())
+        update_row.addWidget(self.update_check_box)
+        update_row.addStretch()
+        self.update_now_btn = PushButton(tr("Jetzt suchen"))
+        self.update_now_btn.clicked.connect(self.check_now_requested.emit)
+        update_row.addWidget(self.update_now_btn)
+        about.addLayout(update_row)
+
+        update_hint = CaptionLabel(tr(
+            "Fragt bei GitHub nach der neuesten Version. Heruntergeladen wird "
+            "nichts - gemeldet wird nur, dass es etwas Neues gibt, mit einem "
+            "Verweis auf die Projektseite. Übertragen wird dabei nichts außer "
+            "der Anfrage selbst."
+        ))
+        update_hint.setWordWrap(True)
+        about.addWidget(update_hint)
+
+        self.update_status = CaptionLabel("")
+        self.update_status.setWordWrap(True)
+        self.update_status.setVisible(False)
+        about.addWidget(self.update_status)
+
         # Markenhinweis: AV1 ist eine eingetragene Marke, die Nennung im
         # Programm gehoert zur korrekten Zuordnung.
         notice = CaptionLabel(tr(AV1_TRADEMARK_NOTE))
@@ -183,6 +219,18 @@ class SettingsPage(ScrollablePage):
         index = self.language_combo.findData(value)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
+
+    def check_for_updates(self) -> bool:
+        return self.update_check_box.isChecked()
+
+    def set_check_for_updates(self, value: bool):
+        self.update_check_box.setChecked(bool(value))
+
+    def set_update_status(self, text: str, busy: bool = False):
+        """Ergebnis der manuellen Prüfung unter den Schalter schreiben."""
+        self.update_now_btn.setEnabled(not busy)
+        self.update_status.setText(text)
+        self.update_status.setVisible(bool(text))
 
     def show_restart_hint(self):
         self.language_hint.setText(
