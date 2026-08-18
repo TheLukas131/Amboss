@@ -1733,6 +1733,30 @@ class MainWindow(FluentWindow):
 
         if not offen:
             self.log("Automatic transfer: nothing left to move.")
+
+            # Verschoben wurde trotzdem - nur während des Laufs statt danach.
+            # Für den Nutzer ist das derselbe Vorgang, also gehört auch dasselbe
+            # Ende dazu: auf die Mediathek wechseln, die Liste neu einlesen und
+            # Bescheid geben. Ohne das blieb die Anwendung nach dem Lauf auf der
+            # Konvertierungsseite stehen und zeigte eine veraltete Mediathek,
+            # weil der vorgezogene Upload niemanden hat, der ihn abschliesst -
+            # der reguläre Abschluss läuft über on_nas_all_completed, und den
+            # gibt es hier nicht.
+            erledigt = bereits or len(self._early_moved)
+            if erledigt:
+                self.switchTo(self.nas_page)
+                self._refresh_library_after_upload(erledigt)
+                self.notify_system(
+                    tr("Verschieben abgeschlossen"),
+                    tr("{count} Medium/Medien in die Mediathek verschoben.")
+                    .format(count=erledigt),
+                )
+                self._toast_success(
+                    tr("Upload abgeschlossen"),
+                    tr("{count} Medium/Medien erfolgreich verschoben.")
+                    .format(count=erledigt),
+                )
+
             # Ohne diesen Zweig bliebe ein eingestelltes Herunterfahren aus:
             # es haengt sonst am Abschluss des Uploads, den es hier nicht gibt,
             # weil bereits waehrend des Laufs alles verschoben wurde.

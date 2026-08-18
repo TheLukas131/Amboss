@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-08-18
+
+### Fixed
+
+- **After a run in which everything had already been moved, the application
+  stayed on the conversion page and left the library list stale.** Switching to
+  the library and re-reading it hangs off the completion of the closing
+  transfer — and since 1.2.4 there is no closing transfer when the run has
+  already moved everything, so nothing completed and nothing happened. The
+  transfer had run, just earlier; the end of it now looks the same either way,
+  including the notification. Until 1.2.3 this was masked by the duplicate
+  transfer: the redundant second pass was what triggered the page switch.
+
 ## [1.3.0] — 2026-08-18
 
 Two things you could not do before: convert files that used to fail, and know
