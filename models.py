@@ -7,7 +7,7 @@ from typing import Optional
 
 APP_NAME = "Amboss"
 APP_TAGLINE = "Konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC"
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 DEFAULT_CQ = 37
 DEFAULT_PRESET = "p5"

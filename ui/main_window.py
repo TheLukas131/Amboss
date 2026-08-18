@@ -113,6 +113,12 @@ class MainWindow(FluentWindow):
         self._early_upload_worker: Optional[NASUploadWorker] = None
         self._early_upload_queue: List[Path] = []
         self._early_dispatched: set = set()
+        # Ordner, deren vorgezogene Uebertragung nachweislich geklappt hat. Der
+        # Abschluss-Upload darf sie nicht noch einmal anfassen.
+        self._early_moved: set = set()
+        # Der Abschluss-Upload wartet, wenn beim Ende der Konvertierung noch ein
+        # vorgezogener laeuft.
+        self._auto_upload_pending = False
         # Worker-Index -> Tabellenzeile, siehe _start_nas_upload/_nas_row_for
         self._nas_row_for_worker_idx: Dict[int, int] = {}
         # Seitenwechsel-Sperre, siehe _on_stacked_page_changed
@@ -1695,16 +1701,49 @@ class MainWindow(FluentWindow):
         if not self.nas_source_input.text().strip():
             self.nas_source_input.setText(target)
 
-        self.scan_converted_folder()
-        if not self.nas_items:
-            self.log("Automatic transfer: no items found in the converted folder.")
+        # Erst abwarten, was während des Laufs schon unterwegs ist. Sonst
+        # greifen zwei Uebertragungen gleichzeitig nach demselben Ordner: eine
+        # kopiert ihn, die andere findet ihn halb verschwunden und meldet einen
+        # Fehler - an einer Datei, die in Wahrheit vollständig angekommen ist.
+        if self._early_transfer_busy():
+            if not self._auto_upload_pending:
+                self._auto_upload_pending = True
+                self.log("Closing transfer waits for the one running alongside the conversion...")
             return
 
-        self.log(f"Automatic transfer started after conversion ({len(self.nas_items)} items)...")
+        self.scan_converted_folder()
+
+        # Was schon während des Laufs übertragen wurde, ist fertig - nicht noch
+        # einmal anfassen. Sichtbar bleibt es trotzdem, mit dem Stand, der
+        # stimmt. Betrifft den Fall, dass lokale Ordner behalten werden; sonst
+        # findet der Scan sie ohnehin nicht mehr.
+        offen = []
+        bereits = 0
+        for item in self.nas_items:
+            if item.folder_path in self._early_moved:
+                item.status = NASUploadStatus.FERTIG
+                bereits += 1
+            else:
+                offen.append(item)
+        if bereits:
+            self.update_nas_table()
+            self.log(f"{bereits} item(s) already moved during the run - skipping them.")
+
+        if not offen:
+            self.log("Automatic transfer: nothing left to move.")
+            # Ohne diesen Zweig bliebe ein eingestelltes Herunterfahren aus:
+            # es haengt sonst am Abschluss des Uploads, den es hier nicht gibt,
+            # weil bereits waehrend des Laufs alles verschoben wurde.
+            if self._shutdown_after_nas_upload:
+                self._shutdown_after_nas_upload = False
+                ShutdownCountdownDialog(self).exec_()
+            return
+
+        self.log(f"Automatic transfer started after conversion ({len(offen)} items)...")
         # Direkt auf die NAS-Seite wechseln: der Upload läuft unbeaufsichtigt los,
         # also soll man den Fortschritt sofort sehen statt ihn suchen zu müssen.
         self.switchTo(self.nas_page)
-        self._start_nas_upload(self.nas_items, skip_confirmation=True)
+        self._start_nas_upload(offen, skip_confirmation=True)
 
     # =========================================================================
     # Allgemeine Hilfsmethoden
@@ -2507,6 +2546,8 @@ class MainWindow(FluentWindow):
         # Neuer Lauf: was im vorigen schon verschoben wurde, ist hier ohne Belang.
         self._early_dispatched.clear()
         self._early_upload_queue.clear()
+        self._early_moved.clear()
+        self._auto_upload_pending = False
         self.eta_timer.start(1000)
 
         self.worker = ConversionWorker(self.videos, settings)
@@ -2705,9 +2746,28 @@ class MainWindow(FluentWindow):
             acquire(self._locked_source)
 
     def _on_early_upload_done(self):
+        # Was nachweislich drüben ist, merken: der Abschluss-Upload darf es
+        # nicht erneut anfassen. Ohne das liefen beide auf denselben Ordner -
+        # einer gewann, der andere meldete einen Fehler an einer Datei, die
+        # längst korrekt in der Mediathek lag.
+        if self._early_upload_worker:
+            for item in self._early_upload_worker.items:
+                if item.status == NASUploadStatus.FERTIG:
+                    self._early_moved.add(item.folder_path)
+
         # Falls währenddessen weitere Ordner fertig geworden sind: gleich weiter.
         self._start_early_upload()
         self._settle_transfer_progress()
+
+        # Der Abschluss-Upload hat gewartet, weil hier noch etwas lief.
+        if self._auto_upload_pending and not self._early_transfer_busy():
+            self._auto_upload_pending = False
+            self._trigger_auto_nas_upload()
+
+    def _early_transfer_busy(self) -> bool:
+        """Ob gerade noch etwas vorgezogen übertragen wird oder ansteht."""
+        return bool((self._early_upload_worker and self._early_upload_worker.isRunning())
+                    or self._early_upload_queue)
 
     def _record_speed_sample(self, video: VideoFile, wall_time: float):
         """Merkt sich, wie viele Video-Sekunden pro Wanduhr-Sekunde diese Auflösung
