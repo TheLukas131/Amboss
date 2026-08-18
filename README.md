@@ -111,6 +111,25 @@ moves or deletes anything. A second instance scanning the same folder skips
 whatever the first one is working on, so the two never reach for the same file;
 files left behind by a crash become visible again once that instance is gone.
 
+**What a setting will cost is shown before the run, not after.** Amboss deletes
+source files once the output is verified, which makes the silent loss the
+dangerous failure: a file that converts, passes both checks and is nevertheless
+worse than the original that then disappears. Duration and stream count are
+right in that case — only the picture is not, and that shows up when you watch
+it, long after the source is gone. So before a run starts, the selected codec and
+container are compared against what the files actually contain, and anything that
+would be lost is named: lossless audio that MP4 cannot carry, image-based or
+positioned subtitles, chroma finer than AV1 accepts, and HDR against H.264, which
+can only do 8 bit.
+
+Each finding can be fixed from the dialog, and the fix applies **only to the
+affected files** — a season with three episodes carrying PGS subtitles switches
+those to MKV and leaves the rest of the queue alone. For series the switch covers
+the whole season, so a season folder does not end up half MP4 and half MKV; for
+movies it is per file. Findings without a remedy, such as Dolby Vision, are stated
+rather than offered. The dialog appears only when there is something to report and
+can be silenced per combination of codec and container.
+
 **New versions are announced, never installed.** At startup Amboss asks GitHub
 whether anything newer has been published and, if so, shows what changed in
 every version since the installed one — going from 1.2.3 to 1.4.0 means 1.2.4
@@ -134,6 +153,7 @@ inspecting the result.
 | | Result |
 |---|---|
 | HDR10 — bit depth, primaries, transfer, matrix | Preserved |
+| Bit depth of 4:4:4 and 4:2:2 sources under AV1 | Preserved; only the chroma subsampling is reduced |
 | Frame rates up to 144 fps, and 4K | Preserved exactly |
 | Multiple audio tracks — AC-3, E-AC-3, DTS, FLAC, AAC | Preserved, all channels |
 | SubRip subtitles | Preserved, including basic styling |
@@ -170,11 +190,17 @@ as they are.
 and MP4 cannot store them; they are skipped so the encode still succeeds. MKV
 carries them through.
 
-**Sources with 4:4:4 chroma fail under AV1.** NVENC's AV1 encoder does not
-accept them and reports `No capable devices found`, a generic message that reads
-like a missing or broken GPU but means only that no device supports this
-particular combination. Selecting H.265 converts the same file on the same card.
-Ordinary releases are 4:2:0 and unaffected either way.
+**Chroma is reduced to 4:2:0 for AV1 when the source is not.** NVENC's AV1
+encoder accepts only 4:2:0 and otherwise reports `No capable devices found`, a
+message that reads like a missing or broken GPU but means only that this
+combination is unsupported. Rather than failing, Amboss converts the chroma
+subsampling — and only that: the bit depth is kept, so a 10-bit source stays
+10-bit and HDR stays HDR. A 4:4:4 or 4:2:2 source therefore loses colour
+resolution, which is a real loss, but a far smaller one than the 8-bit flattening
+a blanket conversion would cause. It is noted in the log whenever it happens.
+H.265 and H.264 accept 4:4:4 directly and are left untouched. Ordinary releases
+are 4:2:0 and unaffected either way. A format that is neither listed nor 4:2:0 is
+not touched at all — it fails visibly instead of being quietly degraded.
 
 **Encoding is NVIDIA-only** — see the table below.
 
@@ -197,7 +223,6 @@ most friction, not by what is most interesting to build.
 
 | | Why |
 |---|---|
-| Handling 4:4:4 sources instead of failing | Convert the chroma rather than refusing the file, while keeping bit depth intact |
 | Software encoding (SVT-AV1) | Makes the application usable without a suitable GPU |
 | AMD (AMF) and Intel (Quick Sync) | Hardware encoding for the remaining vendors — see the note on why this is last |
 

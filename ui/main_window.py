@@ -46,14 +46,16 @@ from models import (
     CONTAINER_LABELS, DEFAULT_CONTAINER, DEFAULT_OUTPUT_FOLDER,
     FileStatus, MediaType, NAS_CATEGORIES, NASUploadItem, NASUploadStatus,
     PRESET_BUCKET_LABELS, PRESET_BUCKETS, PRESET_LABELS, PRESETS, VideoFile,
-    fold_to_enabled,
+    fold_to_enabled, preset_bucket_for,
     VideoMetadata, get_cq_description,
 )
+from format_warnings import apply_finding, dismissal_key, find_losses
 from path_generator import PathGenerator
 from pattern_matcher import PatternMatcher
 from settings_manager import SettingsManager
 from ui import theme
 from ui.failure_report_dialog import FailureReportDialog
+from ui.format_warning_dialog import FormatWarningDialog
 from ui.ffmpeg_download import FFmpegDownloadDialog, ask_to_download, describe_failure
 from ui.log_page import LogPage
 from ui.media_type_review_dialog import MediaTypeReviewDialog
@@ -1895,13 +1897,33 @@ class MainWindow(FluentWindow):
         if not getattr(self, "_ui_ready", False) or not self.videos:
             return
 
-        container = self.container_combo.currentData() or DEFAULT_CONTAINER
+        self._recalculate_target_paths()
+        self.update_file_table()
+        self.update_details_tree()
+
+    def _recalculate_target_paths(self, videos: Optional[List[VideoFile]] = None):
+        """Berechnet die Zielpfade neu - je Datei mit ihrem eigenen Container.
+
+        Eine Datei kann vom eingestellten Container abweichen, wenn sie in der
+        Verlustvorschau umgestellt wurde (siehe format_warnings.py). Ohne dieses
+        `container_override or global` würde jede spätere Neuberechnung die
+        Ausnahme stillschweigend zurücksetzen - und aus dem .mkv, das die
+        Bild-Untertitel retten sollte, wieder ein .mp4 machen.
+
+        `videos` beschränkt die Neuberechnung auf eine Teilmenge; die
+        Kollisionsauflösung läuft trotzdem über alle, sonst kollidiert die
+        Teilmenge mit dem Rest."""
+        if not self.videos:
+            return
+
+        global_container = self.container_combo.currentData() or DEFAULT_CONTAINER
         target_path = Path(self.target_input.text().strip() or ".")
         rename_enabled = self.rename_check.isChecked()
         category_folders = self.settings.get("category_folders") or {}
         season_pattern = self.current_season_pattern()
 
-        for video in self.videos:
+        for video in (self.videos if videos is None else videos):
+            container = video.container_override or global_container
             video.target_path = PathGenerator.generate(
                 video, target_path, rename_enabled, category_folders,
                 season_pattern, container)
@@ -1911,8 +1933,6 @@ class MainWindow(FluentWindow):
                 video.status = FileStatus.UEBERSPRUNGEN
 
         PathGenerator.resolve_collisions(self.videos)
-        self.update_file_table()
-        self.update_details_tree()
 
     def _update_encoder_hint(self):
         """Setzt den Hinweis unter dem Zähler für parallele Tasks.
@@ -2460,21 +2480,90 @@ class MainWindow(FluentWindow):
         if not dialog.exec_():
             return False
 
-        target = self.target_input.text().strip()
-        if target:
-            target_path = Path(target)
-            rename_enabled = self.rename_check.isChecked()
-            container = self.container_combo.currentData() or DEFAULT_CONTAINER
-            for video in reviewable:
-                video.target_path = PathGenerator.generate(
-                    video, target_path, rename_enabled,
-                    self.settings.get("category_folders") or {},
-                    # Der Container muss mit: ohne ihn fällt PathGenerator auf
-                    # MP4 zurück, und eine bestätigte Kategorie hätte still alle
-                    # Zielendungen von .mkv auf .mp4 zurückgesetzt.
-                    self.current_season_pattern(), container)
-            PathGenerator.resolve_collisions(self.videos)
+        if self.target_input.text().strip():
+            # Über _recalculate_target_paths, damit der Container mitkommt: ohne
+            # ihn fiel PathGenerator auf MP4 zurück, und eine bestätigte
+            # Kategorie hatte still alle Zielendungen von .mkv auf .mp4
+            # zurückgesetzt. Dasselbe gilt jetzt für die Ausnahmen je Datei.
+            self._recalculate_target_paths(reviewable)
             self.update_file_table()
+
+        return True
+
+    def _codec_for(self, video: VideoFile) -> str:
+        """Der Codec, mit dem diese Datei kodiert würde.
+
+        Muss dieselbe Reihenfolge treffen wie der Worker: Ausnahme je Datei vor
+        Bucket vor globaler Einstellung. Steht das hier anders, warnt die
+        Vorschau vor etwas, das gar nicht passiert."""
+        if video.codec_override:
+            return video.codec_override
+        if self.separate_presets_check.isChecked():
+            bucket = preset_bucket_for(video.media_type)
+            kasten = getattr(self, f"codec_combo_{bucket}", None)
+            if kasten is not None:
+                return kasten.currentData() or DEFAULT_CODEC
+        return self.codec_combo.currentData() or DEFAULT_CODEC
+
+    def _review_format_losses(self) -> bool:
+        """Zeigt vor dem Start, was die Einstellung kostet. False = abbrechen.
+
+        Der wichtigste Zweck: Amboss löscht Quellen nach geprüfter Konvertierung.
+        Ein Verlust, der die Prüfung besteht - etwa HDR, das H.264 auf 8 Bit
+        herunterrechnet - fällt sonst erst auf, wenn das Original weg ist."""
+        container = self.container_combo.currentData() or DEFAULT_CONTAINER
+        haupt_codec = self.codec_combo.currentData() or DEFAULT_CODEC
+
+        # Nur was tatsächlich konvertiert wird. Übersprungene Dateien (das Ziel
+        # existiert schon) laufen auch im Worker nicht mit - über deren Verluste
+        # zu warnen wäre Lärm, und Lärm ist der Anfang vom Wegklicken.
+        anstehend = [v for v in self.videos if v.status != FileStatus.UEBERSPRUNGEN]
+        if not anstehend:
+            return True
+
+        befunde = find_losses(anstehend, self._codec_for, container)
+
+        verworfen = set(self.settings.get("dismissed_format_warnings") or [])
+        befunde = [b for b in befunde
+                   if dismissal_key(b, container, haupt_codec) not in verworfen]
+        if not befunde:
+            return True
+
+        self.log(f"Format review: {len(befunde)} finding(s) - "
+                 + ", ".join(f"{b.key}({len(b.videos)})" for b in befunde))
+
+        dialog = FormatWarningDialog(befunde, self)
+        if not dialog.exec():
+            self.log("Conversion cancelled in the format review.")
+            return False
+
+        if dialog.dismiss_requested():
+            verworfen.update(dismissal_key(b, container, haupt_codec) for b in befunde)
+            self.settings.set("dismissed_format_warnings", sorted(verworfen))
+            self.settings.save()
+            self.log("Format review: these findings will not be reported again "
+                     "for this combination.")
+
+        geaendert = []
+        for befund in dialog.selected_findings():
+            # Ausgeweitet wird über *alle* Dateien, nicht nur die anstehenden:
+            # gehört eine übersprungene Folge zur selben Staffel, soll sie
+            # dieselbe Endung bekommen, wenn sie später doch konvertiert wird.
+            betroffen = apply_finding(befund, self.videos)
+            geaendert.extend(betroffen)
+            ziel = " ".join(x for x in (befund.remedy_container,
+                                        befund.remedy_codec) if x)
+            self.log(f"Format review: {befund.key} - switching "
+                     f"{len(betroffen)} file(s) to {ziel}")
+
+        if geaendert:
+            # Ein anderer Container heisst eine andere Endung, also neue
+            # Zielpfade - und danach die Kollisionsauflösung erneut.
+            self._recalculate_target_paths()
+            self.update_file_table()
+            self.update_details_tree()
+        else:
+            self.log("Format review: continuing without changes.")
 
         return True
 
@@ -2498,6 +2587,12 @@ class MainWindow(FluentWindow):
                    "nur nach nachweislich erfolgreicher Konvertierung gelöscht.\n\nFortfahren?"),
             ):
                 return
+
+        # Vor der Medientyp-Bestätigung: die Vorschau kann den Container je
+        # Datei umstellen, und die Bestätigung berechnet danach Zielpfade neu.
+        # Umgekehrte Reihenfolge würde die Umstellung wieder überschreiben.
+        if not self._review_format_losses():
+            return
 
         if self._post_nas_enabled():
             if not self._review_media_types_before_start():

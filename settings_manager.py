@@ -75,6 +75,14 @@ DEFAULTS: Dict[str, Any] = {
     # bestimmte, nicht "alle künftigen": erscheint später eine neuere, wird die
     # wieder gemeldet.
     "skipped_version": "",
+    # Hinweise aus der Verlustvorschau, die für eine bestimmte Kombination aus
+    # Codec und Container nicht mehr gezeigt werden sollen (siehe
+    # format_warnings.dismissal_key). Wer bewusst MP4 fährt und die
+    # Bild-Untertitel nicht braucht, soll das nicht bei jedem Lauf bestätigen -
+    # eine Meldung, die zur Klickübung wird, verliert ihre Wirkung genau dann,
+    # wenn sie einmal wichtig ist. Die Kombination steckt im Schlüssel, ein
+    # Wechsel von Codec oder Container fragt also wieder.
+    "dismissed_format_warnings": [],
 }
 
 # Absichtlich NICHT in DEFAULTS/config.json: "PC nach Abschluss herunterfahren"

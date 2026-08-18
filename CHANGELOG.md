@@ -5,6 +5,58 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-08-18
+
+Two things you could not do before: convert files that used to fail, and know
+what a setting costs before the run rather than after.
+
+### Added
+
+- **4:4:4 and 4:2:2 sources convert to AV1 instead of failing.** NVENC's AV1
+  encoder accepts only 4:2:0 and otherwise reports `No capable devices found`,
+  which reads like a broken GPU. Amboss now converts the chroma subsampling —
+  and only that. The bit depth is kept, so a 10-bit source stays 10-bit and HDR
+  stays HDR; the obvious one-line fix, a blanket `-pix_fmt yuv420p`, would have
+  flattened every HDR source to 8 bit and produced exactly the banding one
+  notices first. Formats above 10 bit land at 10, which is more than any
+  playback device outputs. H.265 and H.264 accept 4:4:4 directly and are left
+  untouched — a conversion nobody needs is pure loss. A format that is neither
+  known nor 4:2:0 is not touched either: it fails visibly rather than being
+  quietly degraded. Every conversion is noted in the log.
+- **A report before the run of what the chosen settings will lose.** Sources are
+  deleted once the output is verified, so the dangerous failure is not the crash
+  but the silent loss — a file that converts, passes duration and stream checks,
+  and is still worse than the original that then disappears. Before starting,
+  the selected codec and container are compared against what the files actually
+  contain: lossless audio that MP4 refuses outright, image-based and positioned
+  subtitles, chroma finer than AV1 takes, and HDR against H.264, which can only
+  do 8 bit and would hand back washed-out SDR without a single warning.
+
+  Each finding can be fixed from the dialog, and the fix applies **only to the
+  affected files** — a season with three episodes carrying PGS subtitles moves
+  those to MKV and leaves the rest of the queue as configured. For series the
+  switch covers the whole season, so a season folder is not left half MP4 and
+  half MKV; for movies it is per file. Findings without a remedy, such as Dolby
+  Vision, are stated rather than offered. The dialog appears only when there is
+  something to report, and can be silenced per combination of codec and
+  container — a warning that becomes a clicking exercise stops working on the
+  day it matters.
+
+### Fixed
+
+- **A library transfer with nothing to transfer was reported as successful.**
+  The completeness check is source-relative — it counts whether every source
+  file arrived at the target — and with zero source files that is trivially
+  true: nothing copied out of nothing expected, and the verification finds
+  nothing to object to because there is nothing to check. A folder that had
+  vanished or could not be read therefore showed up as *Finished*, and with
+  *delete local folders* selected it was cleaned up as well. An empty or
+  unreadable source folder is now an error, and no target folder is created for
+  it. Found by running the real transfer code against real files rather than a
+  stand-in.
+- **The graphics-card error message no longer points at 4:4:4 chroma.** That
+  case is now handled, so the old wording sent people down a dead end.
+
 ## [1.2.4] — 2026-08-18
 
 ### Fixed

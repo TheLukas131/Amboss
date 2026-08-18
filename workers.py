@@ -28,12 +28,12 @@ from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from ffmpeg_processor import FFmpegProcessor
+from ffmpeg_processor import FFmpegProcessor, chroma_fallback
 from i18n import tr
 from run_lock import held_by_other
 from models import (
     FAILED_FOLDER_NAME, INPROGRESS_FOLDER_NAME, VIDEO_EXTENSIONS, FileStatus, NASUploadItem, NASUploadStatus, VideoFile,
-    preset_bucket_for,
+    cq_maximum_for, preset_bucket_for,
 )
 
 _CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -108,8 +108,14 @@ def _erklaere_fehler(ffmpeg_ausgabe: str, ziel: Optional[Path]) -> str:
         return tr("Diese Tonspur passt nicht in MP4 (z.B. TrueHD oder DTS-HD MA). "
                   "Mit MKV als Container bleibt sie erhalten.")
     if "no capable devices found" in text:
-        return tr("Die Grafikkarte unterstützt diese Kombination nicht - bei AV1 "
-                  "meist ein Video mit 4:4:4-Farbabtastung.")
+        # Die gängigen Fälle (4:4:4, 4:2:2) rechnet Amboss inzwischen selbst um,
+        # siehe ffmpeg_processor.CHROMA_FALLBACK. Bleibt die Meldung trotzdem,
+        # liegt es an einem Format, das dort nicht steht, oder an der Karte
+        # selbst - deshalb hier kein Verweis mehr auf die Farbabtastung, der
+        # in die falsche Richtung schicken würde.
+        return tr("Die Grafikkarte unterstützt diese Kombination von Codec und "
+                  "Videoformat nicht. Ein anderer Codec (H.265) kommt oft damit "
+                  "zurecht.")
     if "no space left" in text:
         return tr("Kein Speicherplatz mehr auf dem Ziellaufwerk.")
     if "permission denied" in text:
@@ -249,14 +255,33 @@ class ConversionWorker(QThread):
                 preset = self.settings["preset"]
                 codec = self.settings.get("codec", "av1_nvenc")
 
+            # Ausnahme je Datei aus der Verlustvorschau - sie geht sowohl der
+            # globalen Einstellung als auch dem Bucket vor.
+            if video.codec_override:
+                codec = video.codec_override
+                # Und der CQ-Wert muss in die Skala des neuen Codecs passen: AV1
+                # rechnet bis 63, H.265 und H.264 nur bis 51. Global fängt der
+                # Regler das ab, eine Ausnahme je Datei umgeht ihn - ohne diesen
+                # Deckel entstünde ein Wert, den der Encoder ablehnt.
+                cq = min(cq, cq_maximum_for(codec))
+
             temp_path = video.target_path.with_name(
                 f".{video.target_path.stem}.tmp{video.target_path.suffix}"
             )
 
             subtitle_indices = self.ffmpeg.get_text_subtitle_indices(video.source_path)
+            # Beim Scannen wurde die Datei schon mit ffprobe gelesen; das
+            # Pixelformat steht dort drin. Kein Grund, dafür einen zweiten
+            # Prozess pro Datei zu starten - über ein Netzlaufwerk kostet jeder
+            # davon spürbar Zeit. Gleiche Überlegung wie bei der Laufzeit weiter
+            # unten.
+            source_pixel_format = (
+                (video.source_metadata.pixel_format if video.source_metadata else "")
+                or self.ffmpeg.pixel_format(video.source_path)
+            )
             cmd = self.ffmpeg.build_command(
                 video, cq, preset, self.settings["normalize_audio"], codec, temp_path,
-                subtitle_indices,
+                subtitle_indices, source_pixel_format,
             )
 
             # Womit die Ausgabe später verglichen wird. Muss vor dem Encode
@@ -272,6 +297,15 @@ class ConversionWorker(QThread):
             self.log_message.emit(
                 f"[{video.source_path.name}] settings: CQ={cq}, preset={preset}, codec={codec}"
             )
+            # Eine Umrechnung der Chroma-Unterabtastung veraendert das Bild und
+            # gehoert deshalb ins Protokoll, nicht nur in die Befehlszeile.
+            chroma_ersatz = chroma_fallback(source_pixel_format, codec)
+            if chroma_ersatz:
+                self.log_message.emit(
+                    f"[{video.source_path.name}] source is {source_pixel_format}, which "
+                    f"{codec} cannot encode - converting chroma to {chroma_ersatz} "
+                    f"(bit depth kept)"
+                )
             self.log_message.emit(f"FFmpeg command: {' '.join(cmd)}")
 
             # Die Dauer wurde beim Scannen schon per ffprobe ermittelt - kein Grund,
@@ -782,6 +816,24 @@ class NASUploadWorker(QThread):
             self.log_message.emit(f"[{item.name}] moving to: {target_path}")
 
             source_file_count = sum(1 for f in item.folder_path.rglob("*") if f.is_file())
+
+            # Nichts zu übertragen ist kein Erfolg.
+            #
+            # Die ganze Prüfung unten ist quellenrelativ: gezählt wird, ob jede
+            # Quelldatei am Ziel angekommen ist. Bei null Quelldateien ist das
+            # trivial erfüllt - 0 kopiert von 0 erwartet, und _verify_transfer
+            # findet nichts zu beanstanden, weil es nichts zu prüfen gibt. Ein
+            # verschwundener oder unlesbarer Ordner wurde damit als "Fertig"
+            # gemeldet und bei aktivem lokalen Löschen auch noch abgeräumt.
+            if source_file_count == 0:
+                item.status = NASUploadStatus.FEHLER
+                item.error_message = "Quellordner ist leer oder nicht mehr lesbar"
+                self.item_completed.emit(idx, False, "Quellordner leer oder verschwunden")
+                self.log_message.emit(
+                    f"[{item.name}] ERROR: source folder is empty or gone - "
+                    f"nothing was transferred"
+                )
+                return
 
             if target_path.exists():
                 self.progress_updated.emit(idx, 15, tr("Zielordner existiert - führe zusammen..."))

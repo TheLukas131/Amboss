@@ -208,10 +208,11 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Mit MKV als Container bleibt sie erhalten.":
             "This audio track does not fit in MP4 (TrueHD or DTS-HD MA, for "
             "example). Choosing MKV as the container keeps it.",
-        "Die Grafikkarte unterstützt diese Kombination nicht - bei AV1 "
-        "meist ein Video mit 4:4:4-Farbabtastung.":
-            "The graphics card does not support this combination — with AV1 "
-            "that usually means a video with 4:4:4 chroma.",
+        "Die Grafikkarte unterstützt diese Kombination von Codec und "
+        "Videoformat nicht. Ein anderer Codec (H.265) kommt oft damit "
+        "zurecht.":
+            "The graphics card does not support this combination of codec and "
+            "video format. Another codec (H.265) often handles it.",
         "Kein Speicherplatz mehr auf dem Ziellaufwerk.":
             "No space left on the target drive.",
         "Kein Schreibzugriff auf den Zielordner.":
@@ -576,6 +577,77 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Serien im Anime-Stil": "Animated series",
         "Filme im Anime-Stil - weglassen, wenn nicht getrennt geführt":
             "Animated movies - leave out if you don't keep them separately",
+
+        # --- Verlustvorschau vor dem Start ---
+        "Bei dieser Einstellung geht etwas verloren":
+            "This setting will lose something",
+        "Für einen Teil der Dateien passt die gewählte Kombination aus Codec "
+        "und Container nicht. Amboss kann die betroffenen Dateien einzeln "
+        "umstellen - alles andere bleibt, wie es eingestellt ist.":
+            "For some of the files, the chosen combination of codec and container "
+            "does not fit. Amboss can switch just those files - everything else "
+            "stays as configured.",
+        "Für einen Teil der Dateien passt die gewählte Kombination aus Codec "
+        "und Container nicht; bei einigen würde die Konvertierung abbrechen. "
+        "Amboss kann die betroffenen Dateien einzeln umstellen - alles "
+        "andere bleibt, wie es eingestellt ist.":
+            "For some of the files, the chosen combination of codec and container "
+            "does not fit, and some would fail outright. Amboss can switch just "
+            "those files - everything else stays as configured.",
+        "{count} Datei(en)": "{count} file(s)",
+        "Konvertierung bricht ab": "conversion will fail",
+        "und {count} weitere": "and {count} more",
+        "Dafür gibt es keine Abhilfe - nur zur Kenntnis.":
+            "There is no remedy for this — for your information only.",
+        "Für diese Einstellung nicht mehr fragen":
+            "Do not ask again for this setting",
+        "Gilt nur für die hier gezeigten Punkte und genau diese Auswahl von "
+        "Codec und Container. Wählst du später etwas anderes, wird wieder "
+        "gefragt.":
+            "Applies only to the points shown here and to exactly this choice of "
+            "codec and container. Choose something else later and you will be "
+            "asked again.",
+        "Umstellen und starten": "Switch and start",
+        "Trotzdem konvertieren": "Convert anyway",
+        "Verlustfreie Tonspur (TrueHD oder DTS-HD MA). MP4 nimmt sie "
+        "nicht auf - die Konvertierung bricht ab.":
+            "Lossless audio track (TrueHD or DTS-HD MA). MP4 cannot carry it — "
+            "the conversion will fail.",
+        "Auf MKV umstellen, dann bleibt die Spur unverändert erhalten.":
+            "Switch to MKV, which keeps the track untouched.",
+        "Bild-Untertitel (PGS oder VobSub). MP4 kann sie nicht "
+        "speichern, sie werden verworfen.":
+            "Image-based subtitles (PGS or VobSub). MP4 cannot store them, so "
+            "they are dropped.",
+        "Auf MKV umstellen, dann bleiben sie erhalten.":
+            "Switch to MKV, which keeps them.",
+        "ASS-Untertitel. Nach MP4 werden sie zu mov_text - der Text "
+        "bleibt, die Positionierung getypter Schilder geht verloren.":
+            "ASS subtitles. Converted to mov_text for MP4 the text survives, but "
+            "the positioning of typeset signs is lost.",
+        "Auf MKV umstellen, dann bleiben sie unverändert.":
+            "Switch to MKV, which keeps them as they are.",
+        "Mehr als 8 Bit oder HDR. H.264 über NVENC kann nur 8 Bit - das "
+        "Bild wird heruntergerechnet und verliert seinen HDR-Charakter.":
+            "More than 8 bit, or HDR. H.264 through NVENC can only do 8 bit — the "
+            "picture is reduced and loses its HDR character.",
+        "Auf H.265 umstellen, das 10 Bit beherrscht.":
+            "Switch to H.265, which handles 10 bit.",
+        "Farbabtastung feiner als 4:2:0. AV1 über NVENC nimmt nur 4:2:0 an; "
+        "die Farbauflösung wird reduziert. Die Bittiefe bleibt.":
+            "Chroma finer than 4:2:0. AV1 through NVENC accepts only 4:2:0, so "
+            "colour resolution is reduced. The bit depth is kept.",
+        "Auf H.265 umstellen, das 4:4:4 direkt annimmt.":
+            "Switch to H.265, which accepts 4:4:4 directly.",
+        "Mehr als 10 Bit. NVENC kodiert höchstens 10 Bit, mehr ist mit "
+        "dieser Hardware nicht möglich - mehr gibt aber auch kein "
+        "Abspielgerät aus.":
+            "More than 10 bit. NVENC encodes at most 10 bit; more is not possible "
+            "on this hardware — nor does any playback device output more.",
+        "Dolby Vision. Die Kennung übersteht keine Neukodierung über NVENC. "
+        "Ist eine HDR10-Basis vorhanden, bleibt das Bild HDR.":
+            "Dolby Vision. The metadata does not survive a re-encode through "
+            "NVENC. Where an HDR10 base layer exists, the picture stays HDR.",
 
         # --- Update-Prüfung ---
         "Beim Start nach neuen Versionen suchen": "Check for new versions at startup",

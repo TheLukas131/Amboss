@@ -1,13 +1,13 @@
 """Datenmodelle, Enums und Konstanten."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Amboss"
 APP_TAGLINE = "Konvertiert Videos nach AV1, H.265 & H.264 über NVIDIA NVENC"
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.3.0"
 
 DEFAULT_CQ = 37
 DEFAULT_PRESET = "p5"
@@ -188,6 +188,26 @@ class VideoMetadata:
     season: str = ""
     episode: str = ""
 
+    # --- Für die Verlustvorschau vor dem Start (siehe format_warnings.py) ---
+    #
+    # Diese Angaben kosten nichts extra: get_video_metadata ruft ffprobe schon
+    # mit -show_streams auf und hat sie längst in der Hand, hat sie bisher aber
+    # verworfen. Ohne sie liesse sich vor dem Lauf nicht sagen, was die gewählte
+    # Kombination aus Codec und Container kostet.
+    pixel_format: str = ""          # z.B. "yuv420p10le"
+    bit_depth: int = 0              # 0 = unbekannt
+    color_transfer: str = ""        # "smpte2084" = HDR10, "arib-std-b67" = HLG
+    dolby_vision: bool = False
+    # Alle Tonspuren, nicht nur die erste - eine Datei kann Deutsch in AC-3 und
+    # das Original in TrueHD führen, und nur die zweite sprengt MP4.
+    audio_codecs: list = field(default_factory=list)
+    audio_profiles: list = field(default_factory=list)   # gleiche Reihenfolge
+    subtitle_codecs: list = field(default_factory=list)
+
+    def is_hdr(self) -> bool:
+        """HDR10 (PQ) oder HLG. Beides braucht mehr als 8 Bit."""
+        return self.color_transfer in ("smpte2084", "arib-std-b67")
+
 
 @dataclass
 class NASUploadItem:
@@ -227,6 +247,20 @@ class VideoFile:
     target_metadata: Optional[VideoMetadata] = None
     conversion_start_time: Optional[float] = None
     conversion_end_time: Optional[float] = None
+
+    # Abweichung von der globalen Einstellung, nur für diese Datei.
+    #
+    # Wird gesetzt, wenn der Nutzer in der Verlustvorschau vor dem Start
+    # zustimmt, betroffene Dateien umzustellen (siehe format_warnings.py). Leer
+    # heisst "folge der Einstellung" - wer die Vorschau nie sieht, merkt von
+    # diesen Feldern nichts.
+    #
+    # Bewusst je Datei und nicht global: hat eine Staffel drei Folgen mit
+    # Bild-Untertiteln, sollen nur die drei nach MKV wandern und nicht die ganze
+    # Auswahl. Bei Serien wird die Umstellung allerdings auf die ganze Staffel
+    # ausgedehnt, damit ein Staffelordner nicht halb MP4 und halb MKV wird.
+    codec_override: Optional[str] = None
+    container_override: Optional[str] = None
 
     def __post_init__(self):
         if self.source_path.exists():
