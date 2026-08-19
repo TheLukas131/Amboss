@@ -2354,7 +2354,10 @@ class MainWindow(FluentWindow):
                 item.setText(2, "-")
                 item.setText(3, "-")
 
-            item.setText(4, video.status.value)
+            # Übersetzt wie in der Warteschlange: hier stand bisher der rohe
+            # Aufzählungswert, also auf einer englischen Oberfläche "Wartend"
+            # neben "Waiting" in der Warteschlange.
+            item.setText(4, tr(video.status.value))
             status_colors = {
                 FileStatus.WARTEND: colors["neutral"], FileStatus.VERARBEITET: colors["accent"],
                 FileStatus.FERTIG: colors["success"], FileStatus.FEHLER: colors["error"],
@@ -2703,8 +2706,29 @@ class MainWindow(FluentWindow):
             self.worker.stop()
 
     def on_file_started(self, file_index: int):
-        if 0 <= file_index < len(self.videos):
-            self.videos[file_index].conversion_start_time = time.time()
+        if not (0 <= file_index < len(self.videos)):
+            return
+
+        video = self.videos[file_index]
+        video.conversion_start_time = time.time()
+
+        # Den Status hier setzen, nicht erst beim ersten Fortschrittsbericht.
+        # Dazwischen liegt der Start des ffmpeg-Prozesses; bis dahin stand die
+        # Datei auf "Wartend", obwohl sie längst dran war. Bei drei parallelen
+        # Tasks sah man deshalb zwei in Arbeit statt drei.
+        video.status = FileStatus.VERARBEITET
+
+        status_item = self.file_table.item(file_index, 2)
+        if status_item:
+            status_item.setText(tr(FileStatus.VERARBEITET.value))
+            status_item.setForeground(QColor(theme.semantic_colors()["accent"]))
+
+        # Und die Detailseite mitziehen: sie wurde bisher nur beim Abschluss
+        # einer Datei neu aufgebaut und zeigte deshalb den Stand vom letzten
+        # fertigen Element - zwei Ansichten derselben Daten, die sich
+        # widersprachen. Einmal je gestarteter Datei ist billig; im
+        # Fortschrittsbericht (zweimal pro Sekunde und Datei) wäre es das nicht.
+        self.update_details_tree()
 
     def on_progress_updated(self, file_index: int, progress: int, _message: str):
         if 0 <= file_index < len(self.videos):

@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] — 2026-08-18
+
+### Fixed
+
+- **The details page showed fewer files as running than the queue did.** With
+  three parallel tasks the queue listed three, the details page two. Two causes:
+  a file only switched to *Processing* on its first progress report from FFmpeg,
+  so it sat on *Waiting* while its encoder was already starting; and the details
+  page was rebuilt only when a file finished, leaving it on the state from the
+  last completed one. It now follows the start of each file — once per file,
+  not on every progress report, where three files reporting twice a second
+  would mean six full rebuilds per second.
+- **The details page showed its status untranslated.** It wrote the raw value,
+  so an English interface listed *Waiting* in the queue and *Wartend* beside it
+  in the details.
+
 ## [1.3.1] — 2026-08-18
 
 ### Fixed
