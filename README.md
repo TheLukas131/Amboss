@@ -82,6 +82,16 @@ awake — the screen may switch off as usual.
 **Library uploads are verified byte-for-byte.** Every file is compared against
 its counterpart before local copies are deleted.
 
+**A file in the library is never half-written.** Copying goes to a temporary
+name in the destination folder and the final name is only claimed once the copy
+is complete — a rename, which on one volume is a single filesystem operation.
+Interrupt a transfer and the library holds either the finished new file or the
+untouched old one, never something in between. This matters most when replacing
+a version you already have: writing straight to the final name destroys the
+existing file the moment copying starts, long before there is anything to
+replace it with. Leftover temporary files from a killed run are cleared on the
+next transfer.
+
 **Finished items are moved while the rest is still converting.** With automatic
 filing selected, a folder is sent as soon as no file left in the queue targets
 it — a movie right after its own conversion, a series once its last episode is

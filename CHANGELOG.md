@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] — 2026-08-18
+
+### Changed
+
+- **A file in the library is never half-written.** Transfers copied straight to
+  the final filename, and `shutil.copy2` truncates the destination to zero the
+  moment it opens it — so for the whole duration of a copy, minutes for a film
+  over a network share, the library held a file with the right name and the
+  wrong contents. An interrupted transfer left it that way. Worse, replacing a
+  version already in the library destroyed the existing file as copying began,
+  long before there was anything to put in its place: a dropped connection at
+  that point loses both. Copying now goes to a temporary name in the same folder
+  and the final name is claimed by a rename once the copy is done, which on one
+  volume is a single filesystem operation — the name points at the old file or
+  the new one, never at something in between. Measured on a deliberately aborted
+  copy: 13,000 bytes before, 13,000 bytes after, where the old path left 100.
+  The conversion has always worked this way for its own output; the transfer had
+  not. Temporary files left by a killed run are cleared on the next transfer.
+
 ## [1.3.2] — 2026-08-18
 
 ### Fixed

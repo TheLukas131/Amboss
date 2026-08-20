@@ -93,6 +93,50 @@ def _keep_system_awake(active: bool) -> bool:
         return False
 
 
+# Endung der Zwischendatei beim Verschieben in die Mediathek. Der führende Punkt
+# hält sie in Dateilisten aus dem Weg, die Endung macht sie eindeutig
+# wiedererkennbar - nach einem Absturz muss sie sich aufräumen lassen, ohne dass
+# eine echte Mediendatei in Gefahr gerät.
+TRANSFER_TEMP_SUFFIX = ".amboss-tmp"
+
+
+def _kopiere_ueber_zwischennamen(quelle: Path, ziel: Path) -> None:
+    """Kopiert eine Datei so, dass am Ziel nie eine halbe Datei mit dem
+    endgültigen Namen liegt.
+
+    shutil.copy2 öffnet das Ziel zum Schreiben und kürzt es dabei sofort auf
+    null Byte; der Inhalt läuft erst danach hinterher. Für die Dauer des
+    Kopierens - bei einem Film über ein Netzlaufwerk sind das Minuten - liegt in
+    der Mediathek also eine Datei mit richtigem Namen und falschem Inhalt. Reisst
+    die Verbindung ab, bleibt sie so liegen. Lag dort vorher eine ältere Fassung,
+    ist die in dem Moment zerstört, in dem das Kopieren beginnt.
+
+    Deshalb erst unter Zwischennamen ins selbe Verzeichnis und dann umbenennen:
+    os.replace ist auf demselben Datenträger eine einzige Operation des
+    Dateisystems, auch über SMB. Der Name zeigt entweder auf die alte Datei oder
+    auf die neue, nie auf etwas dazwischen.
+
+    Dasselbe Muster benutzt die Konvertierung längst für ihre Ausgabe."""
+    zwischen = ziel.with_name(ziel.name + TRANSFER_TEMP_SUFFIX)
+    try:
+        # Ein Überbleibsel eines abgebrochenen Laufs würde sonst angehängt oder
+        # verwechselt werden.
+        if zwischen.exists():
+            zwischen.unlink()
+        shutil.copy2(quelle, zwischen)
+        zwischen.replace(ziel)
+    except BaseException:
+        # Auch bei Abbruch von aussen nichts Halbfertiges zurücklassen. Der
+        # Fehler selbst wird weitergereicht, das Aufräumen darf ihn nicht
+        # verdecken.
+        try:
+            if zwischen.exists():
+                zwischen.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _erklaere_fehler(ffmpeg_ausgabe: str, ziel: Optional[Path]) -> str:
     """Macht aus einer FFmpeg-Fehlerausgabe eine Erklärung, mit der man etwas
     anfangen kann.
@@ -815,6 +859,12 @@ class NASUploadWorker(QThread):
             self.progress_updated.emit(idx, 10, tr("Ziel: {path}").format(path=target_path))
             self.log_message.emit(f"[{item.name}] moving to: {target_path}")
 
+            # Reste eines abgebrochenen Laufs wegräumen. Wird Amboss mitten im
+            # Kopieren beendet, bleibt eine Zwischendatei liegen - unschädlich,
+            # aber sie belegt Platz und steht sonst irgendwann zu Dutzenden im
+            # Medienordner.
+            self._clear_transfer_temps(target_path)
+
             source_file_count = sum(1 for f in item.folder_path.rglob("*") if f.is_file())
 
             # Nichts zu übertragen ist kein Erfolg.
@@ -879,6 +929,21 @@ class NASUploadWorker(QThread):
             self.progress_updated.emit(idx, 0, tr("Fehler: {reason}").format(reason=str(e)[:50]))
             self.item_completed.emit(idx, False, str(e))
             self.log_message.emit(f"[{item.name}] ERROR: {e}")
+
+    def _clear_transfer_temps(self, folder: Path) -> None:
+        """Entfernt liegengebliebene Zwischendateien im Zielordner.
+
+        Nur die eigene Endung, und nur in diesem einen Ordner - eine Aufräumung,
+        die zu weit greift, ist gefährlicher als der Müll, den sie beseitigt."""
+        try:
+            if not folder.is_dir():
+                return
+            for rest in folder.rglob("*" + TRANSFER_TEMP_SUFFIX):
+                if rest.is_file():
+                    rest.unlink()
+                    self.log_message.emit(f"Removed leftover temporary file: {rest.name}")
+        except OSError as error:
+            self.log_message.emit(f"Leftover temporary files could not be removed: {error}")
 
     def _verify_transfer(self, source: Path, target: Path):
         """Vergleicht jede Quelldatei byteweise-genau mit ihrem Gegenstück auf dem NAS.
@@ -946,7 +1011,7 @@ class NASUploadWorker(QThread):
             else:
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 file_size = src_file.stat().st_size
-                shutil.copy2(src_file, dest_file)
+                _kopiere_ueber_zwischennamen(src_file, dest_file)
                 copied_files += 1
                 progress = 20 + int((copied_files / max(total_files, 1)) * 70)
                 self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
@@ -971,7 +1036,7 @@ class NASUploadWorker(QThread):
             else:
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 file_size = src_file.stat().st_size
-                shutil.copy2(src_file, dest_file)
+                _kopiere_ueber_zwischennamen(src_file, dest_file)
                 copied_files += 1
                 progress = 15 + int((copied_files / max(total_files, 1)) * 75)
                 self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
