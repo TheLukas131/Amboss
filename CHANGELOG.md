@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.3] — 2026-08-18
+## [1.3.3] — 2026-08-20
 
 ### Changed
 
@@ -24,7 +24,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The conversion has always worked this way for its own output; the transfer had
   not. Temporary files left by a killed run are cleared on the next transfer.
 
-## [1.3.2] — 2026-08-18
+## [1.3.2] — 2026-08-19
 
 ### Fixed
 
