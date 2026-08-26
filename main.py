@@ -22,7 +22,11 @@ import crash_logging
 import i18n
 from models import APP_NAME, APP_VERSION
 from resources import resource_path
-from ui.main_window import MainWindow
+
+# ui.main_window wird bewusst NICHT hier importiert, sondern erst in main(),
+# nachdem der Ladebildschirm steht. Dieser eine Import zieht qfluentwidgets und
+# damit den Grossteil der Startzeit nach sich - haenge er hier oben, wuerde er
+# ablaufen, bevor die Anwendung ueberhaupt etwas anzeigen kann.
 
 # Muss vor allem anderen laufen: ohne eigenen excepthook beendet PyQt5 den
 # Prozess bei jeder unbehandelten Ausnahme in einem Slot sofort per qFatal(),
@@ -75,6 +79,25 @@ def main():
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
+    # Ab hier ist etwas zu sehen. Der Ladebildschirm ueberbrueckt den teuersten
+    # Abschnitt des Starts - den Import von qfluentwidgets und den Aufbau des
+    # Fensters. Er wird zuerst gezeigt und erst danach wird importiert, sonst
+    # kaeme er zu spaet, um noch zu nuetzen.
+    splash = None
+    try:
+        from ui.splash import erzeuge_splash
+        logo = resource_path("logo.png")
+        splash = erzeuge_splash(logo if logo.exists() else None, APP_NAME,
+                                APP_VERSION, i18n.tr("Wird geladen..."))
+        splash.show()
+        app.processEvents()
+    except Exception:  # noqa: BLE001
+        # Ein Ladebildschirm, der sich nicht bauen laesst, darf den Start nicht
+        # verhindern - er ist Beiwerk.
+        splash = None
+
+    from ui.main_window import MainWindow
+
     window = MainWindow()
     if icon_path.exists():
         window.setWindowIcon(QIcon(str(icon_path)))
@@ -91,6 +114,11 @@ def main():
     frame.moveCenter(available.center())
     window.move(frame.topLeft())
     window.show()
+
+    if splash is not None:
+        # finish() statt close(): es wartet, bis das Hauptfenster wirklich
+        # sichtbar ist, sonst blitzt dazwischen der Desktop durch.
+        splash.finish(window)
 
     sys.exit(app.exec_())
 

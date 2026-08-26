@@ -578,6 +578,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Filme im Anime-Stil - weglassen, wenn nicht getrennt geführt":
             "Animated movies - leave out if you don't keep them separately",
 
+        "Wird geladen...": "Loading...",
+
         # --- Verlustvorschau vor dem Start ---
         "Bei dieser Einstellung geht etwas verloren":
             "This setting will lose something",

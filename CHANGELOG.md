@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] — 2026-08-26
+
+### Changed
+
+- **The download is 30 MB instead of 86, and the window appears in about a
+  third of the time.** Measured, then removed: `import qfluentwidgets` alone
+  accounted for 4.0 of the 5.2 seconds of startup, almost all of it spent on
+  scipy and numpy. They hang off a single file in that library — the Gaussian
+  blur behind its Acrylic effect, which Amboss switches off. The library
+  provides for their absence itself (`isAcrylicAvailable = False`), so leaving
+  them out is its supported configuration rather than a trick. Together with
+  Qt's software OpenGL, QML and unused display backends — none of which the
+  running process ever loads, verified against its module list — that is 101 MB
+  of the 199 MB that used to be unpacked on every single start. Extraction now
+  takes 0.6 s instead of 1.8, and the window stands after about 2 s instead of
+  2.9 warm, with a larger gap on a cold start.
+- **A loading screen covers the wait that remains.** Between double-click and
+  window, nothing was visible, and people who do not expect that click a second
+  time and start Amboss twice. It appears as soon as the interface library
+  begins loading — the expensive part — and follows the Windows light or dark
+  setting so nothing flashes white in front of a dark application. Drawn with
+  Qt's own means: PyInstaller ships a splash screen of its own, but it pulls
+  Tcl/Tk into the executable, some 12 MB, which for an application that just
+  lost two thirds of its size is a poor trade.
+
+### Added
+
+- **A test suite in the repository** under `tests/`, covering a real conversion
+  through the actual command builder — AV1, H.265, H.264, MKV, multiple audio
+  tracks, 4:4:4 with the bit depth preserved — and a smoke test that draws every
+  page, every dialog, both themes and both languages with those libraries
+  deliberately blocked, so what the executable does is what gets tested.
+
 ## [1.3.3] — 2026-08-20
 
 ### Changed

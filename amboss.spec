@@ -64,9 +64,23 @@ VSVersionInfo(
 # qfluentwidgets bundles its own icons/qss as a compiled Qt resource module
 # (qfluentwidgets/_rc/resource.py), so no extra `datas` collection is needed -
 # PyInstaller's normal import analysis picks that up like any other .py file.
-# Its Mica/Acrylic effects and Theme.AUTO detection do pull in PIL/numpy/scipy
-# and the win32/qframelesswindow frameless-window backend, so those must NOT
-# be excluded (unlike the old single-file app, which never used them).
+# Der win32/qframelesswindow-Unterbau fuer den rahmenlosen Fensterrahmen muss
+# dagegen ausdruecklich mit, ebenso darkdetect fuer Theme.AUTO.
+#
+# NICHT mit muessen scipy, numpy, PIL und colorthief. Sie haengen an genau einer
+# Stelle: qfluentwidgets/common/image_utils.py, und die wird nur von
+# acrylic_label.py gebraucht - fuer den Weichzeichner des Acryl-Effekts, den
+# Amboss abschaltet (setMicaEffectEnabled(False), setAcrylicEnabled(False)).
+#
+# Die Bibliothek sieht den Verzicht selbst vor: acrylic_label faengt den Import
+# mit try/except ImportError ab, setzt isAcrylicAvailable = False und liefert
+# das Bild eben unscharf-los zurueck. Genau das ist der Unterschied zwischen
+# `pip install PyQt-Fluent-Widgets` und `[full]`.
+#
+# Gemessen, was das kostete: 4,0 der 5,2 Sekunden Startzeit gingen fuer
+# `import qfluentwidgets` drauf, praktisch vollstaendig fuer scipy.ndimage und
+# numpy - und 101 der 199 MB im entpackten Archiv, das bei jedem Start neu
+# ausgepackt wird.
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -81,7 +95,6 @@ a = Analysis(
         'qfluentwidgets',
         'qframelesswindow',
         'darkdetect',
-        'colorthief',
         'win32gui',
         'win32con',
         'win32api',
@@ -98,12 +111,48 @@ a = Analysis(
         'matplotlib',
         'pandas',
         'cv2',
+        # Siehe die Begruendung oberhalb von Analysis: haengen ausschliesslich
+        # am Acryl-Weichzeichner, den Amboss nicht benutzt.
+        'scipy',
+        'numpy',
+        'PIL',
+        'colorthief',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Von PyQt5 mitgeschleppte Bibliotheken, die Amboss nie anfasst.
+#
+# Gemessen am laufenden Programm (Modulliste des Prozesses, nicht des
+# PyInstaller-Bootloaders - der laedt Qt gar nicht): keine davon wird geladen.
+# Sie werden trotzdem bei jedem Start mit entpackt.
+#
+# - opengl32sw.dll (20 MB) ist Mesas Software-OpenGL. Qt laedt eine
+#   GL-Implementierung erst, wenn jemand einen GL-Kontext anfordert. Amboss
+#   besteht aus gewoehnlichen Widgets und fordert keinen an; gemessen wird
+#   ueberhaupt keine GL-Bibliothek geladen, auch nicht die des Treibers.
+# - Qt5Quick/Qt5Qml/Qt5QmlModels (7,8 MB) sind QML. Amboss benutzt kein QML.
+# - qwebgl/qminimal/qoffscreen sind Anzeige-Backends fuer Faelle, die es in
+#   einer Windows-Anwendung nicht gibt (qoffscreen brauchen nur die Tests, und
+#   die laufen aus dem Quellcode, nicht aus der exe).
+#
+# ANGLE (libGLESv2, d3dcompiler_47) bleibt bewusst drin, obwohl auch es nicht
+# geladen wird: es ist Qts Rueckfallebene, falls auf irgendeinem Rechner doch
+# ein GL-Kontext angefordert wird. 7 MB als Versicherung gegen ein Programm,
+# das bei einem Fremden gar nicht erst startet, ist ein guter Tausch - das
+# Software-OpenGL darunter waere ohnehin nur die dritte Stufe.
+_UNGENUTZT = {
+    "opengl32sw.dll",
+    "Qt5Quick.dll", "Qt5Qml.dll", "Qt5QmlModels.dll", "Qt5QuickWidgets.dll",
+    "qwebgl.dll", "qminimal.dll", "qoffscreen.dll",
+}
+_vorher = len(a.binaries)
+a.binaries = [eintrag for eintrag in a.binaries
+              if Path(eintrag[0]).name not in _UNGENUTZT]
+print(f"amboss.spec: {_vorher - len(a.binaries)} ungenutzte Qt-Bibliotheken entfernt")
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

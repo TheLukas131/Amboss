@@ -313,6 +313,26 @@ Building the executable:
 pyinstaller amboss.spec
 ```
 
+The build deliberately leaves out scipy, numpy, Pillow and colorthief. They are
+reachable from qfluentwidgets through exactly one file — the Gaussian blur
+behind its Acrylic effect, which Amboss switches off — and the library provides
+for their absence itself, which is the difference between installing
+`PyQt-Fluent-Widgets` and `PyQt-Fluent-Widgets[full]`. Qt's software OpenGL, QML
+and the unused display backends go the same way; the running process never loads
+any of them. Together that is 101 MB of the 199 MB that used to be unpacked on
+every start. Running from source is unaffected — those packages may be installed
+and are simply unused.
+
+Running the tests:
+
+```
+python -u tests/alle_tests.py
+```
+
+They convert real files through the same command builder the application uses,
+and draw every page and dialog with those libraries blocked, so what is tested is
+what the executable does.
+
 ## Configuration
 
 Settings are stored in `%APPDATA%\Amboss\config.json`, together with `app.log`
@@ -370,6 +390,7 @@ source files, being predictable is worth more than being convenient.
 | `update_check.py` | Asks GitHub whether a newer version exists |
 | `i18n.py` | Interface translations |
 | `ui/` | User interface |
+| `tests/` | Real conversions and a smoke test over every page and dialog |
 
 ## License
 
