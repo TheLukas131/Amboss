@@ -111,6 +111,39 @@ def apply_page_transition(stacked) -> int:
     return angepasst
 
 
+# Farbe für Bedienelemente, die gerade nicht gelten. Bewusst ein mittleres Grau
+# statt einer Themefarbe: es soll sich von beiden Designs gleichermaßen
+# zurücknehmen.
+MUTED_COLOR = "#7A7A7A"
+
+
+def mute_slider(slider, muted: bool):
+    """Färbt einen qfluentwidgets-Slider grau, solange sein Wert nicht gilt.
+
+    `setEnabled(False)` allein reicht nicht: der Slider zeichnet sich
+    abgeschaltet **pixelgleich** wie eingeschaltet (gemessen: 0,0 % Unterschied,
+    während eine ComboBox sich zu 100 % ändert). Er reagiert dann zwar nicht
+    mehr auf Klicks, sieht aber als Einziger neben zwei ausgegrauten
+    Auswahlfeldern bedienbar aus - das wirkt wie ein Fehler statt wie Absicht.
+
+    Ein Deckkraft-Effekt wäre der naheliegende Griff, ließ sich aber nicht
+    belegen: ein Widget mit Effekt wird auf durchsichtigen Grund gezeichnet, was
+    beim Abgreifen jedes Pixel ändert, ohne dass daraus folgt, dass am
+    Bildschirm etwas anders aussieht. `setThemeColor` dagegen setzt die Farben,
+    mit denen der Slider Rille und Knopf selbst malt - sichtbar überall und in
+    jedem Abbild messbar.
+
+    Leere Farben bedeuten für qfluentwidgets "nimm die Themefarbe", damit lässt
+    sich der Ausgangszustand wiederherstellen."""
+    from PyQt5.QtGui import QColor
+
+    if muted:
+        grau = QColor(MUTED_COLOR)
+        slider.setThemeColor(grau, grau)
+    else:
+        slider.setThemeColor(QColor(), QColor())
+
+
 def sync_slider_handle(slider):
     """Setzt den Knopf sofort auf die Position, die zu Wert und Breite passt.
 

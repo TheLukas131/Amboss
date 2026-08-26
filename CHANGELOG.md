@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] — 2026-08-26
+
+### Fixed
+
+- **With separate presets active, the quality slider looked usable while the
+  codec and preset boxes beside it were greyed out** — although the note below
+  says all three are ignored. The code had disabled it all along; the slider
+  simply draws itself identically whether enabled or not, unlike the boxes,
+  which change completely. It therefore ignored clicks but advertised the
+  opposite. Its groove and handle are now drawn in grey while the value does
+  not apply.
+
 ## [1.3.4] — 2026-08-26
 
 ### Changed

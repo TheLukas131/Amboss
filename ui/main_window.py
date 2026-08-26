@@ -69,7 +69,7 @@ from ui.update_notice import UpdateCheckThread, UpdateDialog, open_releases_page
 from ui.widgets import (
     DragDropLineEdit, ScrollablePage, SIDEBAR_DARK, SIDEBAR_LIGHT,
     apply_page_transition, apply_scroll_refresh_rate, enforce_control_heights,
-    keep_slider_handle_in_sync, sync_slider_handle,
+    keep_slider_handle_in_sync, mute_slider, sync_slider_handle,
 )
 from workers import ConversionWorker, NASUploadWorker, ScanWorker
 from i18n import tr
@@ -383,6 +383,19 @@ class MainWindow(FluentWindow):
         # verstecken, damit die Zeile nicht bei jedem Umschalten die Höhe ändert.
         for widget in (self.codec_combo, self.preset_combo, self.crf_slider):
             widget.setEnabled(not checked)
+
+        # Der Regler und seine Beschriftung brauchen zusätzlich einen sichtbaren
+        # Hinweis: qfluentwidgets' Slider zeichnet sich abgeschaltet genau wie
+        # eingeschaltet (gemessen: 0,0 % Pixelunterschied). Er reagierte also
+        # schon vorher nicht mehr, sah aber neben zwei ausgegrauten Auswahlfeldern
+        # als Einziger bedienbar aus - was wie ein Fehler wirkt statt wie Absicht.
+        mute_slider(self.crf_slider, checked)
+        # Die Beschriftung darüber bleibt farblich, wie sie ist: die
+        # qfluentwidgets-Labels setzen ihre Farbe selbst und erneuern sie bei
+        # jedem Themenwechsel - weder ein Stylesheet noch setTextColor von
+        # aussen kommen dagegen an (gemessen: 0,0 % Pixelunterschied). Der
+        # Hinweis unter der Zeile sagt ohnehin ausdrücklich, dass die Werte
+        # oben nicht gelten.
         self._refresh_encoder_availability()
         # Beim Einblenden bekommen die Regler erst jetzt ihre echte Breite - der
         # Knopf muss danach neu gesetzt werden, sonst steht er an der Position,
