@@ -53,6 +53,13 @@ def detect_system_theme() -> str:
         return "dark"
 
 
+def semantic_pair(name: str):
+    """(hell, dunkel) einer semantischen Farbe - für Beschriftungen von
+    qfluentwidgets, die beide Farben auf einmal bekommen und beim Wechsel des
+    Designs selbst umschalten."""
+    return _LIGHT_SEMANTIC[name], _DARK_SEMANTIC[name]
+
+
 def semantic_colors() -> dict:
     """Aktuell passende semantische Farben (success/error/warning/accent/neutral)."""
     return _DARK_SEMANTIC if isDarkTheme() else _LIGHT_SEMANTIC

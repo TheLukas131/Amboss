@@ -150,6 +150,14 @@ never replaced underneath itself. A single version can be dismissed for good, or
 the check turned off entirely under Settings. See
 [Update check](#update-check) for what is transmitted.
 
+**A file that runs alone uses every encoder unit of the card.** A conversion
+occupies one NVENC unit, so a single film on a card with three leaves two idle.
+When a file has the card to itself, Amboss asks the encoder to divide each frame
+into strips and work on them with all units at once (split frame encoding). With
+several files running side by side nothing changes — each already has a unit of
+its own. For AV1 and H.265, with FFmpeg 7.1 or newer; it costs a little
+compression and can be switched off under *Advanced*.
+
 Additionally: separate quality presets for animation and live action, remaining
 time for the whole batch derived from measured throughput, detection of duplicate
 downloads (`File.mp4` alongside `File (1).mp4`), a Windows notification on
@@ -387,6 +395,7 @@ source files, being predictable is worth more than being convenient.
 | `library_layout.py` | Reads folder conventions from the existing library |
 | `ffmpeg_processor.py` | FFmpeg and FFprobe invocation |
 | `workers.py` | Conversion and upload, off the UI thread |
+| `queue_model.py` | What the queue shows: seasons, filters, sizes and speeds |
 | `update_check.py` | Asks GitHub whether a newer version exists |
 | `i18n.py` | Interface translations |
 | `ui/` | User interface |

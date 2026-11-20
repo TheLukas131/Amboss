@@ -14,15 +14,14 @@ from PyQt5.QtGui import QColor, QFontMetrics
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QFileDialog, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QSizePolicy, QSystemTrayIcon,
-    QTableWidgetItem, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 from qfluentwidgets import (
     BodyLabel, CardWidget, CaptionLabel, CheckBox, ComboBox, FluentIcon,
     FluentWindow, HorizontalSeparator, InfoBar, InfoBarPosition, LineEdit,
     IndeterminateProgressRing, MessageBox, NavigationItemPosition, PillPushButton, PrimaryPushButton,
     ProgressBar, PushButton, SegmentedWidget, Slider, SpinBox, StrongBodyLabel,
-    TableWidget, TitleLabel, TransparentToolButton, TreeWidget, qconfig, setTheme,
-    setThemeColor,
+    TableWidget, TitleLabel, isDarkTheme, qconfig, setTheme, setThemeColor,
 )
 
 import crash_logging
@@ -31,6 +30,8 @@ from ffmpeg_processor import FFmpegProcessor
 from gpu_info import detect_gpu
 from library_dispatch import ready_folders
 from run_lock import acquire, release
+from queue_model import size_change, status_counts
+from ui.details_panel import DetailsPanel
 from ui.queue_table import QueueTable
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
@@ -48,7 +49,7 @@ from models import (
     FileStatus, MediaType, NAS_CATEGORIES, NASUploadItem, NASUploadStatus,
     PRESET_BUCKET_LABELS, PRESET_BUCKETS, PRESET_LABELS, PRESETS, VideoFile,
     fold_to_enabled, preset_bucket_for,
-    VideoMetadata, get_cq_description,
+    get_cq_description,
 )
 from format_warnings import apply_finding, dismissal_key, find_losses
 from path_generator import PathGenerator
@@ -212,7 +213,6 @@ class MainWindow(FluentWindow):
 
     def _build_pages(self):
         self.convert_page = self._build_convert_page()
-        self.details_page = self._build_details_page()
         self.log_page = LogPage()
         self.nas_page = self._build_nas_page()
         self.settings_page = SettingsPage(self._build_theme_toggle, self._on_settings_changed)
@@ -237,7 +237,6 @@ class MainWindow(FluentWindow):
         )
 
         self.addSubInterface(self.convert_page, FluentIcon.VIDEO, tr("Konvertierung"))
-        self.addSubInterface(self.details_page, FluentIcon.DOCUMENT, tr("Details"))
         self.addSubInterface(self.log_page, FluentIcon.HISTORY, tr("Protokoll"))
         self.addSubInterface(self.nas_page, FluentIcon.CLOUD, tr("Mediathek"))
         self.addSubInterface(self.settings_page, FluentIcon.SETTING, tr("Einstellungen"),
@@ -477,8 +476,8 @@ class MainWindow(FluentWindow):
 
     def _build_source_target_row(self) -> QHBoxLayout:
         """Quelle und Ziel als zwei gleichwertige Karten nebeneinander, jeweils
-        mit einer Zusammenfassung darunter (Anzahl/Größe) - statt einer einzigen
-        gedrängten Zeile aus vier Steuerelementen."""
+        mit einer Zusammenfassung (Anzahl/Größe) neben der Überschrift - statt
+        einer einzigen gedrängten Zeile aus vier Steuerelementen."""
         row = QHBoxLayout()
         row.setSpacing(14)
 
@@ -486,7 +485,14 @@ class MainWindow(FluentWindow):
         source_layout = QVBoxLayout(source_card)
         source_layout.setContentsMargins(18, 14, 18, 14)
         source_layout.setSpacing(8)
-        source_layout.addWidget(CaptionLabel(tr("QUELLORDNER")))
+        # Überschrift und Zusammenfassung in einer Zeile statt übereinander -
+        # die Höhe kommt der Warteschlange zugute.
+        source_head = QHBoxLayout()
+        source_head.addWidget(CaptionLabel(tr("QUELLORDNER")))
+        source_head.addStretch()
+        self.source_summary_label = CaptionLabel(tr("Noch nicht gescannt"))
+        source_head.addWidget(self.source_summary_label)
+        source_layout.addLayout(source_head)
         source_input_row = QHBoxLayout()
         source_input_row.setSpacing(8)
         self.source_input = DragDropLineEdit()
@@ -499,15 +505,18 @@ class MainWindow(FluentWindow):
         source_btn.clicked.connect(self.browse_source)
         source_input_row.addWidget(source_btn)
         source_layout.addLayout(source_input_row)
-        self.source_summary_label = CaptionLabel(tr("Noch nicht gescannt"))
-        source_layout.addWidget(self.source_summary_label)
         row.addWidget(source_card, 1)
 
         target_card = CardWidget()
         target_layout = QVBoxLayout(target_card)
         target_layout.setContentsMargins(18, 14, 18, 14)
         target_layout.setSpacing(8)
-        target_layout.addWidget(CaptionLabel(tr("ZIELORDNER")))
+        target_head = QHBoxLayout()
+        target_head.addWidget(CaptionLabel(tr("ZIELORDNER")))
+        target_head.addStretch()
+        self.target_summary_label = CaptionLabel(tr("Noch nichts konvertiert"))
+        target_head.addWidget(self.target_summary_label)
+        target_layout.addLayout(target_head)
         target_input_row = QHBoxLayout()
         target_input_row.setSpacing(8)
         self.target_input = LineEdit()
@@ -518,8 +527,6 @@ class MainWindow(FluentWindow):
         target_btn.clicked.connect(self.browse_target)
         target_input_row.addWidget(target_btn)
         target_layout.addLayout(target_input_row)
-        self.target_summary_label = CaptionLabel(tr("Noch nichts konvertiert"))
-        target_layout.addWidget(self.target_summary_label)
         row.addWidget(target_card, 1)
 
         return row
@@ -699,6 +706,7 @@ class MainWindow(FluentWindow):
         self.filter_group = QButtonGroup(self)
         self.filter_group.setExclusive(True)
         self._filter_buttons = {}
+        self._filter_labels = {}
         for key, label in (("all", tr("Alle")), ("waiting", tr("Wartend")), ("processing", tr("In Arbeit")),
                            ("done", tr("Fertig")), ("error", tr("Fehler"))):
             btn = PillPushButton(label)
@@ -707,6 +715,7 @@ class MainWindow(FluentWindow):
             btn.clicked.connect(lambda _c=False, k=key: self.apply_filter(k))
             self.filter_group.addButton(btn)
             self._filter_buttons[key] = btn
+            self._filter_labels[key] = label
             toolbar_row.addWidget(btn)
 
         toolbar_row.addSpacing(12)
@@ -742,7 +751,13 @@ class MainWindow(FluentWindow):
         # file_table.refresh_video(index).
         self.file_table = QueueTable()
         self.file_table.remove_requested.connect(self._remove_video)
-        files_layout.addWidget(self.file_table)
+        self.file_table.video_selected.connect(self._toggle_details)
+        files_layout.addWidget(self.file_table, 1)
+
+        # Einzelheiten zur angeklickten Datei - früher eine eigene Seite.
+        self.details_panel = DetailsPanel()
+        self.details_panel.closed.connect(self.file_table.clearSelection)
+        files_layout.addWidget(self.details_panel)
 
         return card
 
@@ -753,39 +768,24 @@ class MainWindow(FluentWindow):
         controls_layout.setContentsMargins(18, 14, 18, 14)
         controls_layout.setSpacing(12)
 
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(10)
-        self.stat_total_label = CaptionLabel(tr("Gesamt: 0"))
-        stats_row.addWidget(self.stat_total_label)
-        stats_row.addWidget(HorizontalSeparator())
-        self.stat_success_label = CaptionLabel(tr("Erfolgreich: 0"))
-        stats_row.addWidget(self.stat_success_label)
-        stats_row.addWidget(HorizontalSeparator())
-        self.stat_error_label = CaptionLabel(tr("Fehler: 0"))
-        stats_row.addWidget(self.stat_error_label)
-        stats_row.addWidget(HorizontalSeparator())
-        self.stat_size_before_label = CaptionLabel(tr("Vorher: -"))
-        stats_row.addWidget(self.stat_size_before_label)
-        stats_row.addWidget(HorizontalSeparator())
-        self.stat_size_after_label = CaptionLabel(tr("Nachher: -"))
-        stats_row.addWidget(self.stat_size_after_label)
-        stats_row.addWidget(HorizontalSeparator())
-        self.stat_savings_label = CaptionLabel(tr("Ersparnis: -"))
-        stats_row.addWidget(self.stat_savings_label)
-        stats_row.addStretch()
-        self.eta_label = CaptionLabel(tr("Verbleibend: --:--:--"))
-        stats_row.addWidget(self.eta_label)
-        controls_layout.addLayout(stats_row)
-
+        # Oben, was man während eines Laufs wissen will: wie weit, wie viele,
+        # wie lange noch. Darunter die Bilanz in einer Zeile - vorher waren es
+        # sechs Felder, von denen zwei den ganzen Lauf über "läuft noch..."
+        # anzeigten.
         progress_row = QHBoxLayout()
-        progress_row.setSpacing(12)
+        progress_row.setSpacing(14)
         self.total_progress = ProgressBar()
         self.total_progress.setMinimumWidth(200)
+        self.total_progress.setFixedHeight(6)
         progress_row.addWidget(self.total_progress, 1)
-        self.total_progress_status_label = CaptionLabel("")
-        self.total_progress_status_label.setMinimumWidth(150)
+        self.total_progress_status_label = StrongBodyLabel("")
         progress_row.addWidget(self.total_progress_status_label)
+        self.eta_label = BodyLabel(tr("Verbleibend: --:--:--"))
+        progress_row.addWidget(self.eta_label)
         controls_layout.addLayout(progress_row)
+
+        self.stats_summary_label = CaptionLabel("")
+        controls_layout.addWidget(self.stats_summary_label)
 
         controls_row = QHBoxLayout()
         controls_row.setSpacing(10)
@@ -835,43 +835,6 @@ class MainWindow(FluentWindow):
         enforce_control_heights(page)
         return page
 
-    # =========================================================================
-    # Seite: Details
-    # =========================================================================
-
-    def _build_details_page(self) -> QWidget:
-        page = ScrollablePage("detailsPage")
-        outer = page.content_layout
-
-        outer.addWidget(TitleLabel(tr("Details")))
-
-        card_layout = self._card(outer, stretch=1)
-        info_label = CaptionLabel(tr("Klicken Sie auf einen Eintrag, um Details anzuzeigen"))
-        card_layout.addWidget(info_label)
-
-        self.details_tree = TreeWidget()
-        self.details_tree.setBorderVisible(True)
-        self.details_tree.setBorderRadius(8)
-        self.details_tree.setColumnCount(5)
-        self.details_tree.setHeaderLabels([tr("Datei"), tr("Original"), tr("Neu"), tr("Ersparnis"), tr("Status")])
-        self.details_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.details_tree.setUniformRowHeights(True)
-        self.details_tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.details_tree.itemClicked.connect(self.on_details_item_clicked)
-        card_layout.addWidget(self.details_tree)
-
-        summary_row = QHBoxLayout()
-        self.total_original_label = CaptionLabel(tr("Originalgröße: -"))
-        self.total_new_label = CaptionLabel(tr("Neue Größe: -"))
-        self.total_savings_label = CaptionLabel(tr("Gesamtersparnis: -"))
-        summary_row.addWidget(self.total_original_label)
-        summary_row.addWidget(self.total_new_label)
-        summary_row.addWidget(self.total_savings_label)
-        summary_row.addStretch()
-        card_layout.addLayout(summary_row)
-
-        enforce_control_heights(page)
-        return page
 
     # =========================================================================
     # Seite: NAS-Upload
@@ -1951,7 +1914,7 @@ class MainWindow(FluentWindow):
 
         self._recalculate_target_paths()
         self.update_file_table()
-        self.update_details_tree()
+        self._refresh_details_panel()
 
     def _recalculate_target_paths(self, videos: Optional[List[VideoFile]] = None):
         """Berechnet die Zielpfade neu - je Datei mit ihrem eigenen Container.
@@ -2084,7 +2047,6 @@ class MainWindow(FluentWindow):
 
         self.videos.clear()
         self.update_file_table()
-        self.details_tree.clear()
         self.total_progress.setValue(0)
         self.update_statistics()
         self.update_total_progress()
@@ -2117,6 +2079,7 @@ class MainWindow(FluentWindow):
     def _update_queue_labels(self):
         """Hält die Kopfzeile der Warteschlange und die Zusammenfassungen auf den
         Quelle-/Ziel-Karten synchron."""
+        self._refresh_queue_summary()
         total = len(self.videos)
         if not total:
             self.stats_label.setText(tr("Warteschlange"))
@@ -2279,7 +2242,7 @@ class MainWindow(FluentWindow):
         self._cleanup_stale_temp_files(Path(self.target_input.text().strip() or "."))
 
         self.update_file_table()
-        self.update_details_tree()
+        self._refresh_details_panel()
         self.update_statistics()
         self.update_total_progress()
         self._update_queue_labels()
@@ -2293,6 +2256,41 @@ class MainWindow(FluentWindow):
         self.file_table.set_videos(self.videos, Path(target) if target else None)
         self._update_remove_buttons_enabled()
         self.apply_filter(self.current_filter)
+        self._refresh_queue_summary()
+
+    def _refresh_queue_summary(self):
+        """Zähler an den Filtern: wie viele Dateien jeder zeigen würde."""
+        counts = status_counts(self.videos)
+        for key, btn in self._filter_buttons.items():
+            label = self._filter_labels[key]
+            btn.setText(f"{label}  {counts[key]}" if self.videos else label)
+
+    def _toggle_details(self, video: VideoFile):
+        """Klick auf eine Zeile: Einzelheiten zeigen - ein zweiter Klick auf
+        dieselbe Zeile schließt sie wieder."""
+        if self.details_panel.video is video:
+            self.details_panel.clear()
+            return
+        self._show_details(video)
+
+    def _show_details(self, video: VideoFile):
+        # Bereits Gelesenes wiederverwenden statt bei jedem Klick ffprobe zu
+        # starten.
+        target_meta = None
+        if video.target_path and video.target_path.exists():
+            target_meta = video.target_metadata or self.ffmpeg.get_video_metadata(video.target_path)
+        self.details_panel.show_video(video, target_meta)
+
+    def _refresh_details_panel(self):
+        """Hält die offenen Einzelheiten aktuell, oder schließt sie, wenn die
+        Datei nicht mehr in der Warteschlange steht."""
+        video = self.details_panel.video
+        if video is None:
+            return
+        if any(v is video for v in self.videos):
+            self._show_details(video)
+        else:
+            self.details_panel.clear()
 
     def _update_remove_buttons_enabled(self):
         """Während eines laufenden Laufs darf nichts entfernt werden - die
@@ -2307,171 +2305,42 @@ class MainWindow(FluentWindow):
         self.videos = [v for v in self.videos if v is not video]
         self.log(f"Removed from the queue: {video.source_path.name}")
         self.update_file_table()
-        self.update_details_tree()
+        self._refresh_details_panel()
         self.update_statistics()
         self.update_total_progress()
         self._update_queue_labels()
         self._update_start_button_state()
         self.clear_list_btn.setEnabled(bool(self.videos))
 
-    def update_details_tree(self):
-        colors = theme.semantic_colors()
-        self.details_tree.clear()
-
-        total_original = 0
-        total_new = 0
-
-        for video in self.videos:
-            item = QTreeWidgetItem()
-            item.setText(0, video.source_path.name)
-            item.setText(1, self.format_size(video.original_size))
-            total_original += video.original_size
-
-            if video.new_size > 0:
-                item.setText(2, self.format_size(video.new_size))
-                total_new += video.new_size
-                savings = ((video.original_size - video.new_size) / video.original_size) * 100
-                if savings > 0:
-                    item.setText(3, f" {savings:.1f}%")
-                    item.setForeground(3, QColor(colors["success"]))
-                else:
-                    item.setText(3, f" {abs(savings):.1f}%")
-                    item.setForeground(3, QColor(colors["error"]))
-            else:
-                item.setText(2, "-")
-                item.setText(3, "-")
-
-            # Übersetzt wie in der Warteschlange: hier stand bisher der rohe
-            # Aufzählungswert, also auf einer englischen Oberfläche "Wartend"
-            # neben "Waiting" in der Warteschlange.
-            item.setText(4, tr(video.status.value))
-            status_colors = {
-                FileStatus.WARTEND: colors["neutral"], FileStatus.VERARBEITET: colors["accent"],
-                FileStatus.FERTIG: colors["success"], FileStatus.FEHLER: colors["error"],
-                FileStatus.UEBERSPRUNGEN: colors["neutral"],
-            }
-            item.setForeground(4, QColor(status_colors.get(video.status, colors["neutral"])))
-
-            item.setData(0, Qt.UserRole, video)
-            item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-            self.details_tree.addTopLevelItem(item)
-
-        self.total_original_label.setText(tr("Originalgröße: {size}").format(size=self.format_size(total_original)))
-        self.total_new_label.setText(tr("Neue Größe: {size}").format(size=self.format_size(total_new)))
-        if total_original > 0 and total_new > 0:
-            total_savings = ((total_original - total_new) / total_original) * 100
-            self.total_savings_label.setText(
-                tr("Gesamtersparnis: {percent}% ({size})").format(
-                    percent=f"{total_savings:.1f}", size=self.format_size(total_original - total_new))
-            )
-
-    def on_details_item_clicked(self, item: QTreeWidgetItem, _column: int):
-        if item.parent() is not None:
-            return
-
-        video: VideoFile = item.data(0, Qt.UserRole)
-        if not video:
-            return
-
-        if item.childCount() > 0:
-            item.takeChildren()
-            return
-
-        self._add_detail_children(item, video)
-        item.setExpanded(True)
-
-    def _add_detail_children(self, parent: QTreeWidgetItem, video: VideoFile):
-        colors = theme.semantic_colors()
-        src_meta = video.source_metadata or VideoMetadata()
-        # Bereits Gelesenes wiederverwenden statt bei jedem Aufklappen ffprobe
-        # zu starten.
-        tgt_meta = None
-        if video.target_path and video.target_path.exists():
-            tgt_meta = video.target_metadata or self.ffmpeg.get_video_metadata(video.target_path)
-
-        details = [
-            ("Video-Codec", src_meta.video_codec or "-", tgt_meta.video_codec if tgt_meta else "-"),
-            ("Audio-Codec", src_meta.audio_codec or "-", tgt_meta.audio_codec if tgt_meta else "-"),
-            (tr("Auflösung"), src_meta.resolution or "-", tgt_meta.resolution if tgt_meta else "-"),
-            ("Video-Bitrate", src_meta.video_bitrate or "-", tgt_meta.video_bitrate if tgt_meta else "-"),
-            ("Audio-Bitrate", src_meta.audio_bitrate or "-", tgt_meta.audio_bitrate if tgt_meta else "-"),
-            (tr("Dauer"), src_meta.duration or "-", tgt_meta.duration if tgt_meta else "-"),
-        ]
-        for label, before, after in details:
-            child = QTreeWidgetItem()
-            child.setText(0, f"    {label}")
-            child.setText(1, str(before))
-            child.setText(2, str(after))
-            child.setForeground(0, QColor(colors["neutral"]))
-            parent.addChild(child)
-
-        meta_header = QTreeWidgetItem()
-        meta_header.setText(0, tr("Metadaten"))
-        meta_header.setForeground(0, QColor(colors["accent"]))
-        parent.addChild(meta_header)
-
-        meta_details = [
-            ("Title", src_meta.title or "(nicht gesetzt)", tgt_meta.title if tgt_meta and tgt_meta.title else "-"),
-            ("Show/Serie", src_meta.show_name or "(nicht gesetzt)", tgt_meta.show_name if tgt_meta and tgt_meta.show_name else "-"),
-            ("Staffel", src_meta.season or "(nicht gesetzt)", tgt_meta.season if tgt_meta and tgt_meta.season else "-"),
-            ("Episode", src_meta.episode or "(nicht gesetzt)", tgt_meta.episode if tgt_meta and tgt_meta.episode else "-"),
-        ]
-        for label, before, after in meta_details:
-            child = QTreeWidgetItem()
-            child.setText(0, f"        {label}")
-            child.setText(1, str(before))
-            child.setText(2, str(after))
-            child.setForeground(0, QColor(colors["neutral"]))
-            parent.addChild(child)
-
-        if video.conversion_start_time and video.conversion_end_time:
-            duration = video.conversion_end_time - video.conversion_start_time
-            conv_child = QTreeWidgetItem()
-            conv_child.setText(0, "Konvertierungsdauer")
-            conv_child.setText(1, f"{int(duration // 60):02d}:{int(duration % 60):02d}")
-            conv_child.setForeground(0, QColor(colors["neutral"]))
-            parent.addChild(conv_child)
-
-        if video.error_message:
-            error_child = QTreeWidgetItem()
-            error_child.setText(0, tr("Fehler"))
-            error_child.setText(1, video.error_message[:100])
-            error_child.setForeground(0, QColor(colors["error"]))
-            error_child.setForeground(1, QColor(colors["error"]))
-            parent.addChild(error_child)
-
     def update_statistics(self):
+        """Die Bilanz in einer Zeile.
+
+        Verglichen wird nur, was tatsächlich konvertiert ist - Größe vorher
+        gegen Größe nachher derselben Dateien. Früher stand die gesamte
+        Warteschlange gegen die bisher fertigen Dateien, was nach der ersten
+        Datei absurd hohe Ersparnisse ergab; deshalb zeigte die Anzeige während
+        des Laufs gar nichts. So herum stimmt die Zahl zu jedem Zeitpunkt."""
         total = len(self.videos)
-        success = sum(1 for v in self.videos if v.status == FileStatus.FERTIG)
-        errors = sum(1 for v in self.videos if v.status == FileStatus.FEHLER)
-
-        total_before = sum(v.original_size for v in self.videos)
-
-        self.stat_total_label.setText(tr("Gesamt: {count}").format(count=total))
-        self.stat_success_label.setText(tr("Erfolgreich: {count}").format(count=success))
-        self.stat_error_label.setText(tr("Fehler: {count}").format(count=errors))
-        self.stat_size_before_label.setText(tr("Vorher: {size}").format(size=self.format_size(total_before)))
-
-        # "Nachher"/tr("Ersparnis") erst zeigen, wenn der Lauf fertig ist - während
-        # der Konvertierung wäre "alle Originalgrößen" gegen "nur die bisher
-        # fertigen Dateien" verglichen worden, was absurd niedrige
-        # Zwischenstände ergab (z.B. 20GB -> ein paar MB nach der ersten Datei).
-        if self.worker and self.worker.isRunning():
-            self.stat_size_after_label.setText(tr("Nachher: läuft noch..."))
-            self.stat_savings_label.setText(tr("Ersparnis: läuft noch..."))
+        if not total:
+            self.stats_summary_label.setText("")
             return
 
-        total_after = sum(v.new_size for v in self.videos if v.new_size > 0)
-        self.stat_size_after_label.setText(tr("Nachher: {size}").format(size=self.format_size(total_after)))
+        errors = sum(1 for v in self.videos if v.status == FileStatus.FEHLER)
+        converted = [v for v in self.videos if v.new_size > 0]
 
-        if total_before > 0 and total_after > 0:
-            savings_pct = ((total_before - total_after) / total_before) * 100
-            self.stat_savings_label.setText(
-                tr("Ersparnis: {value}").format(
-                    value=f"{savings_pct:.1f}% ({self.format_size(total_before - total_after)})")
-            )
-        else:
-            self.stat_savings_label.setText(tr("Ersparnis: -"))
+        teile = [tr("{count} Dateien · {size}").format(
+            count=total, size=self.format_size(sum(v.original_size for v in self.videos)))]
+        if converted:
+            before = sum(v.original_size for v in converted)
+            after = sum(v.new_size for v in converted)
+            teile.append(tr("{count} konvertiert: {change}").format(
+                count=len(converted), change=size_change(before, after)))
+        if errors:
+            hell, dunkel = theme.semantic_pair("error")
+            farbe = dunkel if isDarkTheme() else hell
+            teile.append(f'<span style="color:{farbe}">'
+                         + tr("{count} fehlgeschlagen").format(count=errors) + "</span>")
+        self.stats_summary_label.setText(" &nbsp;·&nbsp; ".join(teile))
 
     @staticmethod
     def format_size(size_bytes: int) -> str:
@@ -2579,7 +2448,7 @@ class MainWindow(FluentWindow):
             # Zielpfade - und danach die Kollisionsauflösung erneut.
             self._recalculate_target_paths()
             self.update_file_table()
-            self.update_details_tree()
+            self._refresh_details_panel()
         else:
             self.log("Format review: continuing without changes.")
 
@@ -2711,13 +2580,8 @@ class MainWindow(FluentWindow):
         # Tasks sah man deshalb zwei in Arbeit statt drei.
         video.status = FileStatus.VERARBEITET
         self.file_table.refresh_video(file_index)
-
-        # Und die Detailseite mitziehen: sie wurde bisher nur beim Abschluss
-        # einer Datei neu aufgebaut und zeigte deshalb den Stand vom letzten
-        # fertigen Element - zwei Ansichten derselben Daten, die sich
-        # widersprachen. Einmal je gestarteter Datei ist billig; im
-        # Fortschrittsbericht (zweimal pro Sekunde und Datei) wäre es das nicht.
-        self.update_details_tree()
+        self._refresh_queue_summary()
+        self._refresh_details_panel()
 
     def on_progress_updated(self, file_index: int, progress: int, _message: str):
         if 0 <= file_index < len(self.videos):
@@ -2761,7 +2625,7 @@ class MainWindow(FluentWindow):
 
             self.file_table.refresh_video(file_index)
 
-            self.update_details_tree()
+            self._refresh_details_panel()
             self.update_statistics()
             self.update_total_progress()
             self._update_queue_labels()
@@ -3078,7 +2942,7 @@ class MainWindow(FluentWindow):
             f"Failed: {failed}{savings_line}\n{'=' * 50}\n"
         )
 
-        self.update_details_tree()
+        self._refresh_details_panel()
         self.update_statistics()
         self.update_total_progress()
         self._update_queue_labels()
@@ -3153,8 +3017,11 @@ class MainWindow(FluentWindow):
         done = sum(1 for v in self.videos if v.status in finished)
         total = len(self.videos)
         if self.worker and self.worker.isRunning():
-            self.total_progress_status_label.setText(tr("In Bearbeitung ({done}/{total})").format(
-                done=done, total=total))
+            # Die Prozentzahl gehört neben den Balken: ohne sie muss man die
+            # Länge eines dünnen Strichs schätzen.
+            self.total_progress_status_label.setText(
+                tr("In Bearbeitung ({done}/{total})").format(done=done, total=total)
+                + f" · {avg_progress} %")
         elif done >= total:
             self.total_progress_status_label.setText(tr("Fertig ({done}/{total})").format(done=done, total=total))
         else:

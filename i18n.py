@@ -690,6 +690,14 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "{count} laufen": "{count} running",
         "noch {time}": "{time} left",
         "Klicken, um die Folgen ein- oder auszublenden": "Click to show or hide the episodes",
+        "{count} konvertiert: {change}": "{count} converted: {change}",
+
+        # --- Einzelheiten unter der Warteschlange ---
+        "Einzelheiten schließen": "Close details",
+        "Vorher": "Before",
+        "Nachher": "After",
+        "Untertitel": "Subtitles",
+        "Konvertiert in {time}": "Converted in {time}",
 
         # --- Split Frame Encoding ---
         "Einzelne Datei auf alle Encoder-Einheiten verteilen":

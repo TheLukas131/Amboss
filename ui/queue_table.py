@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QAbstractItemView, QHeaderView, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -23,7 +23,7 @@ from qfluentwidgets import (
 from qfluentwidgets.common.font import getFont
 
 from i18n import tr
-from models import FileStatus, VideoFile
+from models import FileStatus, MediaType, VideoFile
 from queue_model import (
     COLLAPSE_ABOVE, Group, Row, build_rows, format_duration,
     matches_filter, relative_target, remaining_seconds, size_change, summarize,
@@ -101,10 +101,20 @@ class QueueTable(TableWidget):
         # wie dem Namen, obwohl es inzwischen der kürzere Text ist.
         for spalte in range(7):
             header.setSectionResizeMode(spalte, QHeaderView.Fixed)
-        self.setColumnWidth(COL_TYPE, 96)
-        self.setColumnWidth(COL_STATUS, 108)
+        # Typ und Status so breit wie ihr längster Eintrag in der gewählten
+        # Sprache - eine feste Zahl passte für die eine Sprache und schnitt in
+        # der anderen mitten im Wort ab ("Proc...sing").
+        masse = QFontMetrics(getFont(13))
+
+        def breite_fuer(texte, mindestens):
+            return max(mindestens, max(masse.horizontalAdvance(t) for t in texte) + 30)
+
+        self.setColumnWidth(COL_TYPE, breite_fuer([tr(m.value) for m in MediaType], 80))
+        self.setColumnWidth(COL_STATUS, breite_fuer(
+            [tr(s.value) for s in FileStatus]
+            + [tr("{done}/{total} fertig").format(done=888, total=888)], 90))
         self.setColumnWidth(COL_PROGRESS, 150)
-        self.setColumnWidth(COL_SIZE, 196)
+        self.setColumnWidth(COL_SIZE, breite_fuer(["888.8 GB → 888.8 GB (−88 %)"], 180))
         self.setColumnWidth(COL_REMOVE, 44)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -114,7 +124,7 @@ class QueueTable(TableWidget):
         self.setTextElideMode(Qt.ElideMiddle)
         self.verticalHeader().setDefaultSectionSize(44)
         self.verticalHeader().setVisible(False)
-        self.setMinimumHeight(240)
+        self.setMinimumHeight(200)
 
         self.cellClicked.connect(self._on_cell_clicked)
 

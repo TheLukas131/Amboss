@@ -125,12 +125,11 @@ for i in range(1, 4):
     videos.append(v)
 fenster.videos = videos
 fenster.update_file_table()
-fenster.update_details_tree()
 
 # =======================================================================
 # 1. Jede Seite anzeigen und zeichnen lassen
 # =======================================================================
-seiten = [("Konvertierung", fenster.convert_page), ("Details", fenster.details_page),
+seiten = [("Konvertierung", fenster.convert_page),
           ("Protokoll", fenster.log_page), ("Mediathek", fenster.nas_page),
           ("Einstellungen", fenster.settings_page)]
 
@@ -141,6 +140,20 @@ for name, seite in seiten:
         seite.grab()          # zwingt zum echten Zeichnen
         app.processEvents()
     versuche(f"Seite {name} zeichnen", zeigen)
+
+# Die Einzelheiten zu einer Datei stehen unter der Warteschlange statt auf einer
+# eigenen Seite - aufklappen, zeichnen, wieder schliessen.
+def einzelheiten():
+    fenster.stackedWidget.setCurrentWidget(fenster.convert_page)
+    fenster._toggle_details(videos[0])
+    app.processEvents()
+    if fenster.details_panel.isHidden() or fenster.details_panel.video is not videos[0]:
+        raise AssertionError("Einzelheiten wurden nicht angezeigt")
+    fenster.convert_page.grab()
+    fenster._toggle_details(videos[0])
+    if not fenster.details_panel.isHidden():
+        raise AssertionError("zweiter Klick hat die Einzelheiten nicht geschlossen")
+versuche("Einzelheiten zu einer Datei", einzelheiten)
 
 # Das ganze Fenster inklusive Seitenleiste (dort sass der Acryl-Effekt)
 versuche("Gesamtes Fenster zeichnen", lambda: fenster.grab())

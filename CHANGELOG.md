@@ -38,8 +38,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   FFmpeg itself reports; afterwards the size before and after — `2.6 GB →
   655 MB (−75 %)` — in a column of its own.
 
+- **The filters count.** *Waiting 4*, *Failed 1* — how many files each would
+  show, without having to click through them.
+
 ### Changed
 
+- **Details moved from their own page into the queue.** They were a second list
+  of the same files on another page, to be found again and opened there. A
+  click on a row now shows codec, resolution, bitrate, audio and subtitle
+  tracks, duration and size before and after right beneath the queue; a second
+  click closes it. The *Details* page is gone.
+- **The footer says how far, how many and how long.** Progress bar, count,
+  percentage and time remaining on one line, and the balance in one sentence
+  below — `10 files · 3 converted: 22.0 GB → 5.5 GB (−75 %) · 1 failed`.
+  Before, it was six fields, two of which read *still running…* for the whole
+  run: the saving compared the entire queue against the files finished so far,
+  which gave absurd figures and was therefore hidden. It now compares what was
+  converted with itself and is right at any moment.
+- **Source and output folder take one line less each**, which goes to the
+  queue.
 - **The target column shows the path relative to the output folder**, on one
   line. Every row used to begin with the same stretch of path and wrapped
   because of it, with the part that differs at the end of the second line. The
