@@ -5,6 +5,42 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **FFmpeg downloaded by Amboss was never found.** The download put both
+  programs into `%APPDATA%\Amboss\ffmpeg`, but the lookup only searched `PATH`
+  and the program folder — so the *FFmpeg is missing* notice came straight back
+  after a successful download, on that start and every later one. The folder
+  Amboss itself writes to is now part of the search.
+
+### Changed
+
+- **A file is read by ffprobe once instead of five times.** Each conversion
+  started four ffprobe processes around the encode — subtitle codecs, stream
+  count, then duration and stream count of the output — and the interface
+  started a fifth on its own thread to fill the details page, which held the
+  window for the length of that call every time a file finished. The scan had
+  already read the source; its result is now used, and the output is read once
+  for both checks and for the details. Measured: 5 process starts per file
+  before, 1 after. The checks themselves are unchanged — a lost audio track and
+  a truncated output are rejected exactly as before, and where the scan could
+  not read a file, the source is asked again rather than trusted to have no
+  streams.
+- **Startup waits for fewer programs, and for them side by side.** Before the
+  window appeared, five processes ran one after the other: `ffmpeg -version`,
+  `ffprobe -version`, `ffmpeg -version` a second time, the encoder list and
+  `nvidia-smi`. The repeated call is gone and the rest overlap. Starting a
+  conversion no longer searches for FFmpeg again either.
+- **Finishing a file no longer queries the file system for the whole queue.**
+  Deciding which folders may already move to the library resolved every target
+  path through the file system, twice, after every finished file — on the
+  interface thread. The folder follows from the path itself.
+- **Scanning resolves each folder once instead of each file.** Whether a file
+  lies inside the output folder is decided by its folder; on a network share
+  that is one request per season instead of one per episode.
+
 ## [1.3.5] — 2026-08-26
 
 ### Fixed

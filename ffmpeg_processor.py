@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -111,6 +112,29 @@ def _hat_dolby_vision(stream: dict) -> bool:
     return "dolby vision" in (stream.get("profile") or "").lower()
 
 
+def text_subtitle_indices(subtitle_codecs: List[str]) -> List[int]:
+    """Positionen der textbasierten Untertitelspuren, gezählt nur unter den
+    Untertitelspuren - passend zur ffmpeg-Syntax '0:s:N'.
+
+    Bitmap-Untertitel werden bewusst weggelassen - siehe _TEXT_SUBTITLE_CODECS."""
+    return [
+        i for i, codec in enumerate(subtitle_codecs)
+        if (codec or "").lower() in _TEXT_SUBTITLE_CODECS
+    ]
+
+
+def _zahl(wert, typ=float):
+    """Liest eine Zahl aus einer ffprobe-Angabe; 0, wenn dort keine steht.
+
+    ffprobe schreibt je nach Container 'N/A' oder lässt das Feld weg. Eine
+    einzelne unlesbare Bitrate darf nicht die ganze Auswertung kippen - an ihr
+    hängt inzwischen auch der Abgleich der Spuren."""
+    try:
+        return typ(wert)
+    except (TypeError, ValueError):
+        return typ(0)
+
+
 def chroma_fallback(pixel_format: str, codec: str) -> Optional[str]:
     """Das Pixelformat, auf das umgerechnet werden muss - oder None.
 
@@ -126,42 +150,93 @@ class FFmpegProcessor:
     """Handhabt die FFmpeg/FFprobe-Aufrufe."""
 
     def __init__(self):
-        self.ffmpeg_path = self._find_binary("ffmpeg")
-        self.ffprobe_path = self._find_binary("ffprobe")
         self._encoder_cache: Optional[str] = None
+        self._available: Optional[bool] = None
+        # Beide Programme gleichzeitig suchen statt nacheinander. Jede Suche ist
+        # ein Prozessstart, und der Konstruktor läuft beim Programmstart im
+        # Oberflächen-Thread - vorher waren es dort vier Starts hintereinander
+        # (ffmpeg, ffprobe, noch einmal ffmpeg für is_available, dann die
+        # Encoder-Liste), jetzt läuft die ffprobe-Suche neben den anderen her
+        # und die doppelte Prüfung entfällt.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ffmpeg_suche = pool.submit(self._locate_ffmpeg)
+            ffprobe_suche = pool.submit(self._find_binary, "ffprobe")
+            self.ffmpeg_path = ffmpeg_suche.result()
+            self.ffprobe_path, _ = ffprobe_suche.result()
+
+    def _locate_ffmpeg(self) -> str:
+        """Sucht ffmpeg und liest bei Erfolg gleich die Encoder-Liste.
+
+        Die Liste wird beim Start ohnehin gebraucht (siehe
+        check_encoder_available); hier geholt, läuft die Abfrage neben der
+        ffprobe-Suche statt danach."""
+        path, runs = self._find_binary("ffmpeg")
+        self.ffmpeg_path = path
+        if runs:
+            self._available = True
+            self._load_encoders()
+        return path
 
     @staticmethod
-    def _find_binary(name: str) -> str:
-        """Sucht eine ffmpeg/ffprobe-Binary im PATH oder im Programmordner."""
-        for cmd in (name, f"{name}.exe"):
-            try:
-                result = subprocess.run(
-                    [cmd, "-version"], capture_output=True, timeout=5,
-                    creationflags=_CREATIONFLAGS,
-                )
-                if result.returncode == 0:
-                    return cmd
-            except (subprocess.SubprocessError, FileNotFoundError, OSError):
-                continue
-
-        app_dir = Path(__file__).parent
-        for subdir in ("", name, f"{name}/bin"):
-            candidate = app_dir / subdir / f"{name}.exe"
-            if candidate.exists():
-                return str(candidate)
-
-        return name
-
-    def is_available(self) -> bool:
-        """Prüft, ob die ffmpeg-Binary tatsächlich aufrufbar ist."""
+    def _runs(cmd: str) -> bool:
         try:
             result = subprocess.run(
-                [self.ffmpeg_path, "-version"], capture_output=True, timeout=5,
+                [cmd, "-version"], capture_output=True, timeout=5,
                 creationflags=_CREATIONFLAGS,
             )
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             return False
+
+    @classmethod
+    def _find_binary(cls, name: str):
+        """Sucht eine ffmpeg/ffprobe-Binary im PATH, im eigenen Download-Ordner
+        oder im Programmordner.
+
+        Gibt (Pfad, läuft) zurück. `läuft` ist True, wenn der Aufruf mit
+        '-version' hier bereits geklappt hat - dann muss is_available() ihn
+        nicht wiederholen."""
+        for cmd in (name, f"{name}.exe"):
+            if cls._runs(cmd):
+                return cmd, True
+
+        # Von Amboss selbst geholt (siehe ffmpeg_setup.py). Ohne diesen Blick
+        # blieb ein erfolgreicher Download wirkungslos: die Programme lagen in
+        # %APPDATA%\Amboss\ffmpeg, gesucht wurde aber nur im PATH und neben dem
+        # Programm - "FFmpeg fehlt" kam also direkt nach dem Herunterladen
+        # wieder. Erst hier importiert: ffmpeg_setup zieht urllib und zipfile
+        # nach, die im Normalfall (FFmpeg im PATH) niemand braucht.
+        import ffmpeg_setup
+        abgelegt = ffmpeg_setup.install_dir() / f"{name}.exe"
+        if abgelegt.exists():
+            return str(abgelegt), False
+
+        app_dir = Path(__file__).parent
+        for subdir in ("", name, f"{name}/bin"):
+            candidate = app_dir / subdir / f"{name}.exe"
+            if candidate.exists():
+                return str(candidate), False
+
+        return name, False
+
+    def is_available(self) -> bool:
+        """Prüft, ob die ffmpeg-Binary tatsächlich aufrufbar ist.
+
+        Das Ergebnis steht nach dem ersten Aufruf fest - meist schon nach der
+        Suche im Konstruktor, die genau diesen Aufruf bereits gemacht hat."""
+        if self._available is None:
+            self._available = self._runs(self.ffmpeg_path)
+        return self._available
+
+    def _load_encoders(self) -> None:
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-encoders"], capture_output=True, text=True,
+                timeout=10, creationflags=_CREATIONFLAGS,
+            )
+            self._encoder_cache = result.stdout
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def check_encoder_available(self, encoder: str) -> bool:
         """Prüft, ob ein bestimmter Encoder (z.B. av1_nvenc oder h264_nvenc) verfügbar ist.
@@ -170,14 +245,9 @@ class FFmpegProcessor:
         Programmstart abgefragt - vorher lief bei jedem Codec-Wechsel in der UI ein
         eigener ffmpeg-Aufruf mit bis zu 10 s Timeout."""
         if self._encoder_cache is None:
-            try:
-                result = subprocess.run(
-                    [self.ffmpeg_path, "-encoders"], capture_output=True, text=True,
-                    timeout=10, creationflags=_CREATIONFLAGS,
-                )
-                self._encoder_cache = result.stdout
-            except (subprocess.SubprocessError, OSError):
-                return False
+            self._load_encoders()
+        if self._encoder_cache is None:
+            return False
         return encoder in self._encoder_cache
 
     def get_text_subtitle_indices(self, filepath: Path) -> List[int]:
@@ -198,10 +268,7 @@ class FFmpegProcessor:
         except (subprocess.SubprocessError, ValueError, json.JSONDecodeError, OSError):
             return []
 
-        return [
-            i for i, stream in enumerate(streams)
-            if (stream.get("codec_name") or "").lower() in _TEXT_SUBTITLE_CODECS
-        ]
+        return text_subtitle_indices([stream.get("codec_name") or "" for stream in streams])
 
     def get_duration(self, filepath: Path) -> float:
         """Ermittelt die Dauer einer Videodatei in Sekunden."""
@@ -270,7 +337,14 @@ class FFmpegProcessor:
             return ""
 
     def get_video_metadata(self, filepath: Path) -> VideoMetadata:
-        """Ermittelt detaillierte Metadaten einer Videodatei mit FFprobe."""
+        """Ermittelt detaillierte Metadaten einer Videodatei mit FFprobe.
+
+        Ein einziger ffprobe-Aufruf liefert alles, was Amboss über eine Datei
+        wissen muss: Laufzeit, Spuren je Art, Pixelformat, Untertitel-Codecs.
+        Die Konvertierung stützt ihren Abgleich darauf (siehe
+        ConversionWorker), statt dieselbe Datei für jede Angabe einzeln noch
+        einmal zu öffnen. `metadata.probed` sagt, ob das Lesen geklappt hat -
+        nur dann sind die Zählungen belastbar."""
         metadata = VideoMetadata()
         try:
             result = subprocess.run([
@@ -285,7 +359,7 @@ class FFmpegProcessor:
 
             data = json.loads(result.stdout)
             fmt = data.get("format", {})
-            duration_secs = float(fmt.get("duration", 0))
+            duration_secs = _zahl(fmt.get("duration", 0))
             hours = int(duration_secs // 3600)
             minutes = int((duration_secs % 3600) // 60)
             seconds = int(duration_secs % 60)
@@ -299,9 +373,18 @@ class FFmpegProcessor:
             metadata.episode = tags.get("episode_sort", tags.get("episode_id", tags.get("EPISODE_SORT", "")))
 
             erste_videospur = True
+            # Nach Index eindeutig, wie in count_streams: sicher ist sicher,
+            # falls ffprobe eine Spur doppelt aufführt (MPEG-TS).
+            gesehen = set()
             for stream in data.get("streams", []):
+                index = stream.get("index")
+                if index in gesehen:
+                    continue
+                gesehen.add(index)
+
                 codec_type = stream.get("codec_type", "")
                 if codec_type == "video":
+                    metadata.video_stream_count += 1
                     if not erste_videospur:
                         # Eingebettete Cover-Bilder (mjpeg) sind formal
                         # Videospuren; sie dürfen die Angaben der echten nicht
@@ -320,12 +403,12 @@ class FFmpegProcessor:
                     metadata.dolby_vision = _hat_dolby_vision(stream)
 
                     bit_rate = stream.get("bit_rate", "")
-                    if bit_rate:
-                        metadata.video_bitrate = f"{int(bit_rate) / 1_000_000:.2f} Mbps"
+                    if _zahl(bit_rate, int):
+                        metadata.video_bitrate = f"{_zahl(bit_rate, int) / 1_000_000:.2f} Mbps"
                     else:
                         total_br = fmt.get("bit_rate", "")
-                        if total_br:
-                            metadata.video_bitrate = f"~{int(total_br) / 1_000_000:.2f} Mbps (gesamt)"
+                        if _zahl(total_br, int):
+                            metadata.video_bitrate = f"~{_zahl(total_br, int) / 1_000_000:.2f} Mbps (gesamt)"
 
                 elif codec_type == "audio":
                     metadata.audio_codecs.append(stream.get("codec_name", "") or "")
@@ -333,13 +416,17 @@ class FFmpegProcessor:
                     if not metadata.audio_codec:
                         metadata.audio_codec = stream.get("codec_name", "Unbekannt")
                         audio_br = stream.get("bit_rate", "")
-                        if audio_br:
-                            metadata.audio_bitrate = f"{int(audio_br) / 1000:.0f} kbps"
+                        if _zahl(audio_br, int):
+                            metadata.audio_bitrate = f"{_zahl(audio_br, int) / 1000:.0f} kbps"
 
                 elif codec_type == "subtitle":
                     metadata.subtitle_codecs.append(stream.get("codec_name", "") or "")
 
-        except (subprocess.SubprocessError, ValueError, json.JSONDecodeError, OSError):
+            # Erst hier: alle Spuren sind durchgezählt.
+            metadata.probed = True
+
+        except (subprocess.SubprocessError, ValueError, json.JSONDecodeError, OSError,
+                AttributeError, TypeError):
             pass
 
         return metadata

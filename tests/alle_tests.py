@@ -19,6 +19,7 @@ REIHEN = [
     ("Rauchtest: Seiten, Dialoge, Designs", "test_rauchtest.py"),
     ("Echte Konvertierung", "test_konvertierung.py"),
     ("Getrennte Presets: was gilt, sieht man", "test_getrennte_presets.py"),
+    ("Abgleich Quelle/Ergebnis", "test_abgleich.py"),
 ]
 
 RAUSCHEN = re.compile(r"QFontDatabase|Note that Qt|QFluentWidgets Pro|^\s*$")

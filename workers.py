@@ -28,7 +28,7 @@ from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from ffmpeg_processor import FFmpegProcessor, chroma_fallback
+from ffmpeg_processor import FFmpegProcessor, chroma_fallback, text_subtitle_indices
 from i18n import tr
 from run_lock import held_by_other
 from models import (
@@ -181,11 +181,15 @@ class ConversionWorker(QThread):
     all_completed = pyqtSignal()
     file_started = pyqtSignal(int)
 
-    def __init__(self, videos: List[VideoFile], settings: dict):
+    def __init__(self, videos: List[VideoFile], settings: dict,
+                 ffmpeg: Optional[FFmpegProcessor] = None):
         super().__init__()
         self.videos = videos
         self.settings = settings
-        self.ffmpeg = FFmpegProcessor()
+        # Den vorhandenen Prozessor mitbenutzen: ein neuer sucht ffmpeg und
+        # ffprobe erneut, das sind Prozessstarts im Oberflächen-Thread genau in
+        # dem Moment, in dem auf "Start" geklickt wurde.
+        self.ffmpeg = ffmpeg or FFmpegProcessor()
         self._stop_requested = False
         self._pause_requested = False
         self._lock = threading.Lock()
@@ -313,12 +317,23 @@ class ConversionWorker(QThread):
                 f".{video.target_path.stem}.tmp{video.target_path.suffix}"
             )
 
-            subtitle_indices = self.ffmpeg.get_text_subtitle_indices(video.source_path)
-            # Beim Scannen wurde die Datei schon mit ffprobe gelesen; das
-            # Pixelformat steht dort drin. Kein Grund, dafür einen zweiten
-            # Prozess pro Datei zu starten - über ein Netzlaufwerk kostet jeder
-            # davon spürbar Zeit. Gleiche Überlegung wie bei der Laufzeit weiter
-            # unten.
+            # Beim Scannen wurde die Datei schon mit ffprobe gelesen; Untertitel,
+            # Tonspuren und Pixelformat stehen dort drin. Kein Grund, dafür je
+            # Datei drei weitere Prozesse zu starten - über ein Netzlaufwerk
+            # kostet jeder davon spürbar Zeit. Gleiche Überlegung wie bei der
+            # Laufzeit weiter unten.
+            #
+            # Nur wenn der Scan die Datei wirklich lesen konnte (`probed`): eine
+            # leere Angabe hiesse sonst "keine Tonspur erwartet", und die
+            # Prüfung nach dem Encode liesse eine verlorene Spur durchgehen.
+            # Dann wird wie bisher frisch nachgefragt.
+            gelesen = video.source_metadata
+            if gelesen is not None and gelesen.probed:
+                subtitle_indices = text_subtitle_indices(gelesen.subtitle_codecs)
+                source_audio_count = len(gelesen.audio_codecs)
+            else:
+                subtitle_indices = self.ffmpeg.get_text_subtitle_indices(video.source_path)
+                source_audio_count = self.ffmpeg.count_streams(video.source_path)["audio"]
             source_pixel_format = (
                 (video.source_metadata.pixel_format if video.source_metadata else "")
                 or self.ffmpeg.pixel_format(video.source_path)
@@ -334,7 +349,7 @@ class ConversionWorker(QThread):
             # textbasierten - Bitmap-Formate werden bewusst nicht übernommen.
             expected_streams = {
                 "video": 1,
-                "audio": self.ffmpeg.count_streams(video.source_path)["audio"],
+                "audio": source_audio_count,
                 "subtitle": len(subtitle_indices),
             }
 
@@ -478,7 +493,16 @@ class ConversionWorker(QThread):
             # bei der schwachen Prüfung, aber es wird nichts gelöscht.
             return False, "Laufzeit der Quelldatei unbekannt - keine Prüfung möglich"
 
-        target_duration = self.ffmpeg.get_duration(target)
+        # Ein ffprobe-Aufruf für Laufzeit und Spuren zusammen, statt je einem.
+        # Was er liefert, braucht die Oberfläche ohnehin für die Detailansicht -
+        # die hat dieselbe Datei bisher im Oberflächen-Thread ein drittes Mal
+        # gelesen. Klappt der gemeinsame Aufruf nicht, wird wie früher einzeln
+        # gefragt: strenger als vorher darf die Prüfung dadurch nicht werden.
+        target_meta = self.ffmpeg.get_video_metadata(target)
+        if target_meta.probed:
+            target_duration = target_meta.duration_seconds
+        else:
+            target_duration = self.ffmpeg.get_duration(target)
         if target_duration <= 0:
             return False, "Laufzeit der Zieldatei nicht lesbar"
 
@@ -489,7 +513,8 @@ class ConversionWorker(QThread):
             )
 
         if expected_streams:
-            actual = self.ffmpeg.count_streams(target)
+            actual = (target_meta.stream_counts() if target_meta.probed
+                      else self.ffmpeg.count_streams(target))
             for kind, label in (("video", "Videospur"), ("audio", "Tonspur"),
                                 ("subtitle", "Untertitelspur")):
                 erwartet, vorhanden = expected_streams.get(kind, 0), actual.get(kind, 0)
@@ -498,6 +523,10 @@ class ConversionWorker(QThread):
                         f"{label}en unvollständig ({vorhanden} statt {erwartet})"
                     )
 
+        # Erst nach bestandener Prüfung: eine verworfene Zieldatei soll in der
+        # Detailansicht keine Angaben hinterlassen.
+        if target_meta.probed:
+            video.target_metadata = target_meta
         return True, ""
 
     def _delete_pending_sources(self):
@@ -680,49 +709,45 @@ class ScanWorker(QThread):
         laufend = (self.source_path / INPROGRESS_FOLDER_NAME).resolve()
         fehler_ordner = (laufend / FAILED_FOLDER_NAME).resolve()
 
-        def gesperrt(ordner: Path) -> bool:
+        def gesperrt(aufgeloest: Path) -> bool:
             if fremder_lauf is None:
-                return False
-            try:
-                aufgeloest = ordner.resolve()
-            except OSError:
                 return False
             if aufgeloest == fehler_ordner or fehler_ordner in aufgeloest.parents:
                 return False
             return aufgeloest == laufend or laufend in aufgeloest.parents
 
+        def ausgenommen(aufgeloest: Path) -> bool:
+            return any(aufgeloest == ordner or ordner in aufgeloest.parents
+                       for ordner in self.ignored_folders)
+
+        # Aufgelöst wird je Ordner, nicht je Datei: ob eine Datei im
+        # Ausgabeordner liegt, entscheidet sich an ihrem Ordner. resolve() fragt
+        # das Dateisystem - auf einem Netzlaufwerk eine eigene Anfrage je
+        # Aufruf, bei einer Staffel also vierundzwanzig statt einer.
         files = []
         uebersprungen = 0
+        result.ignored_count = 0
         for wurzel, _, dateinamen in os.walk(self.source_path):
-            ordner = Path(wurzel)
-            if gesperrt(ordner):
-                uebersprungen += sum(1 for n in dateinamen
-                                     if os.path.splitext(n)[1].lower() in erlaubt)
+            namen = [n for n in dateinamen
+                     if os.path.splitext(n)[1].lower() in erlaubt]
+            if not namen:
                 continue
-            for name in dateinamen:
-                if os.path.splitext(name)[1].lower() in erlaubt:
-                    files.append(ordner / name)
+            ordner = Path(wurzel)
+            try:
+                aufgeloest = ordner.resolve()
+            except OSError:
+                aufgeloest = None
+            if aufgeloest is not None and gesperrt(aufgeloest):
+                uebersprungen += len(namen)
+                continue
+            if aufgeloest is not None and ausgenommen(aufgeloest):
+                result.ignored_count += len(namen)
+                continue
+            files.extend(ordner / name for name in namen)
         if uebersprungen:
             result.log_lines.append(
                 f"Skipped {uebersprungen} file(s) - another Amboss "
                 f"(process {fremder_lauf}) is working on them.")
-        gefunden = len(files)
-
-        def ist_ausgenommen(pfad: Path) -> bool:
-            try:
-                aufgeloest = pfad.resolve()
-            except OSError:
-                return False
-            for ordner in self.ignored_folders:
-                try:
-                    aufgeloest.relative_to(ordner)
-                    return True
-                except ValueError:
-                    continue
-            return False
-
-        files = [f for f in files if not ist_ausgenommen(f)]
-        result.ignored_count = gefunden - len(files)
         if self._stop_requested:
             return result
 
@@ -888,10 +913,10 @@ class NASUploadWorker(QThread):
             if target_path.exists():
                 self.progress_updated.emit(idx, 15, tr("Zielordner existiert - führe zusammen..."))
                 self.log_message.emit(f"[{item.name}] target folder exists - merging")
-                copied = self._merge_folders(item.folder_path, target_path, idx)
+                copied = self._copy_folder(item.folder_path, target_path, idx, 15, 75)
             else:
                 self.progress_updated.emit(idx, 20, tr("Kopiere Ordner..."))
-                copied = self._copy_folder(item.folder_path, target_path, idx)
+                copied = self._copy_folder(item.folder_path, target_path, idx, 20, 70)
 
             # Nur löschen, wenn die Übertragung nachweislich vollständig war -
             # bei Abbruch/Fehler bleibt die lokale Kopie die einzig sichere.
@@ -992,7 +1017,13 @@ class NASUploadWorker(QThread):
         self._bytes_copied += file_size
         self.total_progress_updated.emit(int((self._bytes_copied / self._total_bytes) * 100))
 
-    def _copy_folder(self, source: Path, target: Path, idx: int) -> int:
+    def _copy_folder(self, source: Path, target: Path, idx: int,
+                     progress_base: int, progress_span: int) -> int:
+        """Kopiert den Ordnerinhalt ans Ziel; vorhandene Ordner werden ergänzt.
+
+        Neu anlegen und Zusammenführen sind derselbe Vorgang - beide standen
+        hier zweimal Zeile für Zeile, unterschieden nur durch den Abschnitt
+        des Fortschrittsbalkens, den sie füllen."""
         all_files = list(source.rglob("*"))
         total_files = len([f for f in all_files if f.is_file()])
         copied_files = 0
@@ -1013,32 +1044,7 @@ class NASUploadWorker(QThread):
                 file_size = src_file.stat().st_size
                 _kopiere_ueber_zwischennamen(src_file, dest_file)
                 copied_files += 1
-                progress = 20 + int((copied_files / max(total_files, 1)) * 70)
-                self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
-                self._advance_overall_progress(file_size)
-
-        return copied_files
-
-    def _merge_folders(self, source: Path, target: Path, idx: int) -> int:
-        all_files = list(source.rglob("*"))
-        total_files = len([f for f in all_files if f.is_file()])
-        copied_files = 0
-
-        for src_file in all_files:
-            if self._stop_requested:
-                break
-
-            rel_path = src_file.relative_to(source)
-            dest_file = target / rel_path
-
-            if src_file.is_dir():
-                dest_file.mkdir(parents=True, exist_ok=True)
-            else:
-                dest_file.parent.mkdir(parents=True, exist_ok=True)
-                file_size = src_file.stat().st_size
-                _kopiere_ueber_zwischennamen(src_file, dest_file)
-                copied_files += 1
-                progress = 15 + int((copied_files / max(total_files, 1)) * 75)
+                progress = progress_base + int((copied_files / max(total_files, 1)) * progress_span)
                 self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
                 self._advance_overall_progress(file_size)
 

@@ -88,6 +88,12 @@ class MainWindow(FluentWindow):
         # Beim Scannen aussortierte Doppel-Downloads; gelöscht erst beim Start.
         self._redundant_duplicates: List[Path] = []
         self.worker: Optional[ConversionWorker] = None
+        # Die Grafikkarte wird abgefragt, während FFmpeg gesucht wird, statt
+        # danach: beides sind Prozessstarts (nvidia-smi, ffmpeg, ffprobe), auf
+        # die der Start des Fensters wartet. Abgeholt wird das Ergebnis weiter
+        # unten, direkt vor dem Seitenaufbau.
+        gpu_suche = ThreadPoolExecutor(max_workers=1)
+        gpu_ergebnis = gpu_suche.submit(detect_gpu)
         self.ffmpeg = FFmpegProcessor()
         self.encoder_available = True
         self.current_filter = "all"
@@ -152,7 +158,8 @@ class MainWindow(FluentWindow):
             pass  # Nicht kritisch (z.B. auf Windows 10 / Nicht-Windows)
 
         # Vor dem Seitenaufbau: der Hinweis am Task-Zähler braucht die Angaben.
-        self.gpu_info = detect_gpu()
+        self.gpu_info = gpu_ergebnis.result()
+        gpu_suche.shutdown(wait=False)
 
         self._build_pages()
         self._apply_settings_to_controls()
@@ -1961,9 +1968,13 @@ class MainWindow(FluentWindow):
 
         for video in (self.videos if videos is None else videos):
             container = video.container_override or global_container
+            bisher = video.target_path
             video.target_path = PathGenerator.generate(
                 video, target_path, rename_enabled, category_folders,
                 season_pattern, container)
+            if video.target_path != bisher:
+                # Gehört zur Datei am alten Pfad, nicht zu dieser.
+                video.target_metadata = None
             if video.status == FileStatus.UEBERSPRUNGEN and not video.target_path.exists():
                 video.status = FileStatus.WARTEND
             elif video.status == FileStatus.WARTEND and video.target_path.exists():
@@ -2409,7 +2420,11 @@ class MainWindow(FluentWindow):
     def _add_detail_children(self, parent: QTreeWidgetItem, video: VideoFile):
         colors = theme.semantic_colors()
         src_meta = video.source_metadata or VideoMetadata()
-        tgt_meta = self.ffmpeg.get_video_metadata(video.target_path) if video.target_path and video.target_path.exists() else None
+        # Bereits Gelesenes wiederverwenden statt bei jedem Aufklappen ffprobe
+        # zu starten.
+        tgt_meta = None
+        if video.target_path and video.target_path.exists():
+            tgt_meta = video.target_metadata or self.ffmpeg.get_video_metadata(video.target_path)
 
         details = [
             ("Video-Codec", src_meta.video_codec or "-", tgt_meta.video_codec if tgt_meta else "-"),
@@ -2685,7 +2700,7 @@ class MainWindow(FluentWindow):
         self._auto_upload_pending = False
         self.eta_timer.start(1000)
 
-        self.worker = ConversionWorker(self.videos, settings)
+        self.worker = ConversionWorker(self.videos, settings, self.ffmpeg)
         self.worker.progress_updated.connect(self.on_progress_updated)
         self.worker.file_completed.connect(self.on_file_completed)
         self.worker.file_started.connect(self.on_file_started)
@@ -2785,7 +2800,12 @@ class MainWindow(FluentWindow):
 
             if success and video.target_path and video.target_path.exists():
                 video.new_size = video.target_path.stat().st_size
-                video.target_metadata = self.ffmpeg.get_video_metadata(video.target_path)
+                # Der Worker hat die Zieldatei für seine Prüfung schon gelesen
+                # und das Ergebnis mitgegeben. Nur wenn nicht (übersprungene
+                # Datei), hier nachholen - ffprobe im Oberflächen-Thread hält
+                # sonst bei jeder fertigen Datei kurz das Fenster an.
+                if video.target_metadata is None:
+                    video.target_metadata = self.ffmpeg.get_video_metadata(video.target_path)
 
             progress_bar = self.file_table.cellWidget(file_index, 3)
             if isinstance(progress_bar, ProgressBar):

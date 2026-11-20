@@ -21,7 +21,7 @@ auch bei bunt gemischter Reihenfolge - Serie A, Serie B, wieder Serie A.
 """
 
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Iterable, List, Optional, Set
 
 from models import FileStatus, VideoFile
 
@@ -40,25 +40,24 @@ def media_folder_of(video: VideoFile, output_base: Path) -> Optional[Path]:
     if not video.target_path:
         return None
     try:
-        rest = video.target_path.resolve().relative_to(output_base.resolve())
-    except (OSError, ValueError):
-        return None
+        # Rein rechnerisch, ohne das Dateisystem zu fragen: der Zielpfad wurde
+        # aus genau diesem Zielordner zusammengesetzt, er beginnt also mit ihm.
+        # resolve() fragt für jeden Pfadteil das Dateisystem, und diese
+        # Funktion läuft nach jeder fertigen Datei für die gesamte
+        # Warteschlange im Oberflächen-Thread - bei 500 Dateien waren das
+        # 2000 Auflösungen je Abschluss.
+        rest = video.target_path.relative_to(output_base)
+    except ValueError:
+        # Unterschiedlich geschrieben (relativ gegen absolut, Laufwerk gegen
+        # UNC): dann wie bisher über das Dateisystem vergleichen.
+        try:
+            rest = video.target_path.resolve().relative_to(output_base.resolve())
+        except (OSError, ValueError):
+            return None
     # rest = <Kategorie>/<Serie>/<Staffel>/<Datei> oder <Kategorie>/<Film>/<Datei>
     if len(rest.parts) < 3:
         return None
     return output_base / rest.parts[0] / rest.parts[1]
-
-
-def pending_folders(videos: Iterable[VideoFile], output_base: Path) -> Set[Path]:
-    """Ordner, auf die noch mindestens eine unerledigte Datei zielt."""
-    offen = set()
-    for video in videos:
-        if video.status in _ABGESCHLOSSEN:
-            continue
-        ordner = media_folder_of(video, output_base)
-        if ordner is not None:
-            offen.add(ordner)
-    return offen
 
 
 def ready_folders(videos: Iterable[VideoFile], output_base: Path,
@@ -78,19 +77,22 @@ def ready_folders(videos: Iterable[VideoFile], output_base: Path,
 
     `already_dispatched` verhindert, dass derselbe Ordner zweimal losgeschickt
     wird, wenn nach ihm noch weitere Dateien fertig werden."""
-    videos = list(videos)
-    offen = pending_folders(videos, output_base)
     bereits = already_dispatched or set()
 
-    fertig: Dict[Path, bool] = {}
+    offen: Set[Path] = set()
+    fertig: Set[Path] = set()
     fehlerhaft: Set[Path] = set()
 
+    # Ein Durchgang für alle drei Mengen - der Ordner je Datei wird so nur
+    # einmal bestimmt statt zweimal.
     for video in videos:
         ordner = media_folder_of(video, output_base)
         if ordner is None:
             continue
-        if video.status == FileStatus.FERTIG:
-            fertig[ordner] = True
+        if video.status not in _ABGESCHLOSSEN:
+            offen.add(ordner)
+        elif video.status == FileStatus.FERTIG:
+            fertig.add(ordner)
         elif video.status == FileStatus.FEHLER:
             fehlerhaft.add(ordner)
 

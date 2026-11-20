@@ -204,6 +204,22 @@ class VideoMetadata:
     audio_profiles: list = field(default_factory=list)   # gleiche Reihenfolge
     subtitle_codecs: list = field(default_factory=list)
 
+    # --- Für den Abgleich zwischen Quelle und Ergebnis (siehe workers.py) ---
+    #
+    # `probed` sagt, ob ffprobe die Datei tatsächlich gelesen hat. Ohne diese
+    # Angabe wäre "keine Tonspur" nicht von "ffprobe ist gescheitert" zu
+    # unterscheiden - und auf einer leeren Zählung darf keine Prüfung aufbauen,
+    # nach der Quelldateien gelöscht werden.
+    probed: bool = False
+    # Alle Videospuren, eingebettete Cover-Bilder eingeschlossen - dieselbe
+    # Zählweise wie FFmpegProcessor.count_streams.
+    video_stream_count: int = 0
+
+    def stream_counts(self) -> dict:
+        """Spuren je Art, im Format von FFmpegProcessor.count_streams."""
+        return {"video": self.video_stream_count, "audio": len(self.audio_codecs),
+                "subtitle": len(self.subtitle_codecs)}
+
     def is_hdr(self) -> bool:
         """HDR10 (PQ) oder HLG. Beides braucht mehr als 8 Bit."""
         return self.color_transfer in ("smpte2084", "arib-std-b67")
