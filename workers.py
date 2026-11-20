@@ -31,6 +31,9 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from ffmpeg_processor import (
     FFmpegProcessor, chroma_fallback, text_subtitle_indices, use_split_encode,
 )
+from file_transfer import (
+    COPYING, TRANSFER_TEMP_SUFFIX, TransferCancelled, copy_verified,
+)
 from i18n import tr
 from run_lock import held_by_other
 from models import (
@@ -94,50 +97,6 @@ def _keep_system_awake(active: bool) -> bool:
         return ctypes.windll.kernel32.SetThreadExecutionState(flags) != 0
     except (OSError, AttributeError):
         return False
-
-
-# Endung der Zwischendatei beim Verschieben in die Mediathek. Der führende Punkt
-# hält sie in Dateilisten aus dem Weg, die Endung macht sie eindeutig
-# wiedererkennbar - nach einem Absturz muss sie sich aufräumen lassen, ohne dass
-# eine echte Mediendatei in Gefahr gerät.
-TRANSFER_TEMP_SUFFIX = ".amboss-tmp"
-
-
-def _kopiere_ueber_zwischennamen(quelle: Path, ziel: Path) -> None:
-    """Kopiert eine Datei so, dass am Ziel nie eine halbe Datei mit dem
-    endgültigen Namen liegt.
-
-    shutil.copy2 öffnet das Ziel zum Schreiben und kürzt es dabei sofort auf
-    null Byte; der Inhalt läuft erst danach hinterher. Für die Dauer des
-    Kopierens - bei einem Film über ein Netzlaufwerk sind das Minuten - liegt in
-    der Mediathek also eine Datei mit richtigem Namen und falschem Inhalt. Reisst
-    die Verbindung ab, bleibt sie so liegen. Lag dort vorher eine ältere Fassung,
-    ist die in dem Moment zerstört, in dem das Kopieren beginnt.
-
-    Deshalb erst unter Zwischennamen ins selbe Verzeichnis und dann umbenennen:
-    os.replace ist auf demselben Datenträger eine einzige Operation des
-    Dateisystems, auch über SMB. Der Name zeigt entweder auf die alte Datei oder
-    auf die neue, nie auf etwas dazwischen.
-
-    Dasselbe Muster benutzt die Konvertierung längst für ihre Ausgabe."""
-    zwischen = ziel.with_name(ziel.name + TRANSFER_TEMP_SUFFIX)
-    try:
-        # Ein Überbleibsel eines abgebrochenen Laufs würde sonst angehängt oder
-        # verwechselt werden.
-        if zwischen.exists():
-            zwischen.unlink()
-        shutil.copy2(quelle, zwischen)
-        zwischen.replace(ziel)
-    except BaseException:
-        # Auch bei Abbruch von aussen nichts Halbfertiges zurücklassen. Der
-        # Fehler selbst wird weitergereicht, das Aufräumen darf ihn nicht
-        # verdecken.
-        try:
-            if zwischen.exists():
-                zwischen.unlink()
-        except OSError:
-            pass
-        raise
 
 
 def _erklaere_fehler(ffmpeg_ausgabe: str, ziel: Optional[Path]) -> str:
@@ -262,6 +221,15 @@ class ConversionWorker(QThread):
                 self._delete_pending_sources()
             except Exception as e:  # noqa: BLE001
                 self.log_message.emit(f"Error while cleaning up source files: {e}")
+            # Eigener Schritt, nicht Anhängsel des Löschens: vorher lief er nur,
+            # wenn es etwas zu löschen gab. Ohne "Quelle löschen" - oder wenn
+            # jede Datei scheiterte - blieben die gescheiterten Quellen deshalb
+            # zwischen den übrigen liegen, obwohl der Bericht am Ende sagt, wo
+            # sie jetzt sind.
+            try:
+                self._set_aside_failed_sources()
+            except Exception as e:  # noqa: BLE001
+                self.log_message.emit(f"Error while setting failed source files aside: {e}")
             # Die Schlafsperre unbedingt wieder freigeben - auch nach einem
             # Abbruch, sonst bliebe der Rechner bis zum Beenden der App wach.
             _keep_system_awake(False)
@@ -652,7 +620,6 @@ class ConversionWorker(QThread):
                     f"[{video.source_path.name}] source file could not be deleted: {e}"
                 )
         self.log_message.emit(f"Deleted {deleted} verified source file(s)")
-        self._set_aside_failed_sources()
 
     def _set_aside_failed_sources(self):
         """Legt die Quellen gescheiterter Dateien in einen eigenen Ordner.
@@ -924,15 +891,21 @@ class NASUploadWorker(QThread):
             # Byte-gewichtet statt Item-gewichtet: bei sehr unterschiedlich großen
             # Ordnern (z.B. 2 kleine Serien + 1 riesiger Film) wäre "2 von 3 Items
             # fertig" = 66% völlig irreführend, obwohl kaum Daten geflossen sind.
-            self._total_bytes = max(sum(item.total_size for item in self.items), 1)
+            #
+            # Gezählt wird jede Datei zweimal: einmal beim Kopieren, einmal beim
+            # Vergleich danach. Beides dauert über ein Netzlaufwerk ähnlich
+            # lang - zählte nur das Kopieren, stünde der Balken bei 100 %,
+            # während die Hälfte der Arbeit noch aussteht.
+            self._total_bytes = max(sum(item.total_size for item in self.items), 1) * 2
             self._bytes_copied = 0
+            self._last_progress_emit = 0.0
 
             for idx, item in enumerate(self.items):
                 if self._stop_requested:
                     break
 
                 if item.status in (NASUploadStatus.FERTIG, NASUploadStatus.UEBERSPRUNGEN):
-                    self._bytes_copied += item.total_size
+                    self._bytes_copied += item.total_size * 2
                     self.total_progress_updated.emit(int((self._bytes_copied / self._total_bytes) * 100))
                     continue
 
@@ -994,10 +967,10 @@ class NASUploadWorker(QThread):
             if target_path.exists():
                 self.progress_updated.emit(idx, 15, tr("Zielordner existiert - führe zusammen..."))
                 self.log_message.emit(f"[{item.name}] target folder exists - merging")
-                copied = self._copy_folder(item.folder_path, target_path, idx, 15, 75)
+                copied = self._copy_folder(item, target_path, idx, 15, 80)
             else:
                 self.progress_updated.emit(idx, 20, tr("Kopiere Ordner..."))
-                copied = self._copy_folder(item.folder_path, target_path, idx, 20, 70)
+                copied = self._copy_folder(item, target_path, idx, 20, 75)
 
             # Nur löschen, wenn die Übertragung nachweislich vollständig war -
             # bei Abbruch/Fehler bleibt die lokale Kopie die einzig sichere.
@@ -1010,7 +983,7 @@ class NASUploadWorker(QThread):
                 )
                 return
 
-            self.progress_updated.emit(idx, 92, tr("Prüfe Übertragung..."))
+            self.progress_updated.emit(idx, 96, tr("Prüfe Übertragung..."))
             verified, reason = self._verify_transfer(item.folder_path, target_path)
             if not verified:
                 item.status = NASUploadStatus.FEHLER
@@ -1052,11 +1025,13 @@ class NASUploadWorker(QThread):
             self.log_message.emit(f"Leftover temporary files could not be removed: {error}")
 
     def _verify_transfer(self, source: Path, target: Path):
-        """Vergleicht jede Quelldatei byteweise-genau mit ihrem Gegenstück auf dem NAS.
+        """Zweite Kontrolle über den ganzen Ordner: ist jede Quelldatei am Ziel
+        vorhanden und gleich gross?
 
-        Der bisherige Vergleich zählte nur Dateien. Eine über SMB abgebrochene
-        oder gekürzt geschriebene Datei hätte diese Zählung bestanden - und der
-        lokale Ordner wäre danach gelöscht worden."""
+        Den Inhalt hat copy_verified bereits je Datei Byte für Byte verglichen,
+        bevor sie ihren Namen bekam. Hier geht es um das, was dabei nicht
+        auffällt: eine Datei, die nach dem Vergleich wieder verschwunden ist,
+        oder eine, die gar nicht erst an die Reihe kam."""
         try:
             for src_file in source.rglob("*"):
                 if not src_file.is_file():
@@ -1093,20 +1068,23 @@ class NASUploadWorker(QThread):
             except OSError as e:
                 self.log_message.emit(f"[{item.name}] local folder could not be deleted: {e}")
 
-    def _advance_overall_progress(self, file_size: int):
-        """Aktualisiert den byte-gewichteten Gesamtfortschritt über alle Items hinweg."""
-        self._bytes_copied += file_size
-        self.total_progress_updated.emit(int((self._bytes_copied / self._total_bytes) * 100))
-
-    def _copy_folder(self, source: Path, target: Path, idx: int,
+    def _copy_folder(self, item: NASUploadItem, target: Path, idx: int,
                      progress_base: int, progress_span: int) -> int:
         """Kopiert den Ordnerinhalt ans Ziel; vorhandene Ordner werden ergänzt.
 
-        Neu anlegen und Zusammenführen sind derselbe Vorgang - beide standen
-        hier zweimal Zeile für Zeile, unterschieden nur durch den Abschnitt
-        des Fortschrittsbalkens, den sie füllen."""
+        Neu anlegen und Zusammenführen sind derselbe Vorgang, unterschieden nur
+        durch den Abschnitt des Fortschrittsbalkens, den sie füllen.
+
+        Der Fortschritt folgt den übertragenen Bytes, nicht den fertigen
+        Dateien: ein Ordner mit einem einzigen Film stand sonst von Anfang bis
+        Ende auf demselben Wert."""
+        source = item.folder_path
         all_files = list(source.rglob("*"))
-        total_files = len([f for f in all_files if f.is_file()])
+        files = [f for f in all_files if f.is_file()]
+        total_files = len(files)
+        # Kopieren und Prüfen zählen beide, siehe run().
+        item_total = max(sum(f.stat().st_size for f in files), 1) * 2
+        item_done = 0
         copied_files = 0
 
         target.mkdir(parents=True, exist_ok=True)
@@ -1120,13 +1098,37 @@ class NASUploadWorker(QThread):
 
             if src_file.is_dir():
                 dest_file.mkdir(parents=True, exist_ok=True)
-            else:
-                dest_file.parent.mkdir(parents=True, exist_ok=True)
-                file_size = src_file.stat().st_size
-                _kopiere_ueber_zwischennamen(src_file, dest_file)
-                copied_files += 1
-                progress = progress_base + int((copied_files / max(total_files, 1)) * progress_span)
-                self.progress_updated.emit(idx, progress, tr("Kopiere {done}/{total}: {name}").format(done=copied_files, total=total_files, name=src_file.name))
-                self._advance_overall_progress(file_size)
+                continue
 
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            nummer = copied_files + 1
+
+            def melde(abschnitt: str, anzahl: int, name=src_file.name, nummer=nummer):
+                nonlocal item_done
+                item_done += anzahl
+                self._bytes_copied += anzahl
+                # Höchstens viermal pro Sekunde: jeder Block wäre bei einem
+                # schnellen Laufwerk ein Dutzend Meldungen pro Sekunde an die
+                # Oberfläche, ohne dass man mehr sähe.
+                jetzt = time.monotonic()
+                if jetzt - self._last_progress_emit < 0.25:
+                    return
+                self._last_progress_emit = jetzt
+                vorlage = (tr("Kopiere {done}/{total}: {name}") if abschnitt == COPYING
+                           else tr("Prüfe {done}/{total}: {name}"))
+                anteil = min(item_done / item_total, 1.0)
+                self.progress_updated.emit(
+                    idx, progress_base + int(anteil * progress_span),
+                    vorlage.format(done=nummer, total=total_files, name=name))
+                self.total_progress_updated.emit(
+                    min(int(self._bytes_copied / self._total_bytes * 100), 99))
+
+            try:
+                copy_verified(src_file, dest_file, melde, lambda: self._stop_requested)
+            except TransferCancelled:
+                break
+            copied_files += 1
+
+        self.total_progress_updated.emit(
+            min(int(self._bytes_copied / self._total_bytes * 100), 100))
         return copied_files

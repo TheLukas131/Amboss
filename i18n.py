@@ -699,6 +699,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Untertitel": "Subtitles",
         "Konvertiert in {time}": "Converted in {time}",
 
+        # --- Transfer: Vergleich nach dem Kopieren ---
+        "Prüfe {done}/{total}: {name}": "Verifying {done}/{total}: {name}",
+
         # --- Split Frame Encoding ---
         "Einzelne Datei auf alle Encoder-Einheiten verteilen":
             "Spread a single file across all encoder units",

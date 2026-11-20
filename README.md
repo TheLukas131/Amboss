@@ -79,8 +79,13 @@ for hours, usually overnight. Sleep is suppressed for the duration of encoding
 and of library transfers, and released again afterwards. The display is not kept
 awake — the screen may switch off as usual.
 
-**Library uploads are verified byte-for-byte.** Every file is compared against
-its counterpart before local copies are deleted.
+**Library uploads are verified byte-for-byte.** Every file is read back from
+the library and compared against its source before it is given its final name,
+and local copies are deleted only after that. A copy that differs has never
+been in the library under the real name. The price is time: each file crosses
+the network twice, so a transfer takes roughly twice as long. A transfer can be
+stopped in the middle of a file, and the progress bar moves within a large file
+rather than only between files.
 
 **A file in the library is never half-written.** Copying goes to a temporary
 name in the destination folder and the final name is only claimed once the copy
@@ -395,6 +400,7 @@ source files, being predictable is worth more than being convenient.
 | `library_layout.py` | Reads folder conventions from the existing library |
 | `ffmpeg_processor.py` | FFmpeg and FFprobe invocation |
 | `workers.py` | Conversion and upload, off the UI thread |
+| `file_transfer.py` | Verified, cancellable copy into the library |
 | `queue_model.py` | What the queue shows: seasons, filters, sizes and time remaining |
 | `update_check.py` | Asks GitHub whether a newer version exists |
 | `i18n.py` | Interface translations |

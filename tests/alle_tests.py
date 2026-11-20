@@ -22,6 +22,7 @@ REIHEN = [
     ("Abgleich Quelle/Ergebnis", "test_abgleich.py"),
     ("Split Frame Encoding", "test_split_encoding.py"),
     ("Warteschlange", "test_warteschlange.py"),
+    ("Transfer und _Failed", "test_transfer.py"),
 ]
 
 RAUSCHEN = re.compile(r"QFontDatabase|Note that Qt|QFluentWidgets Pro|^\s*$")

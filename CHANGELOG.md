@@ -89,6 +89,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Library uploads were not verified byte-for-byte, although the documentation
+  said so.** The check compared file sizes. A copy of the right length with the
+  wrong contents passed it, and the local folder was deleted afterwards. Every
+  file is now read back from the library and compared with its source, block
+  by block, *before* it is given its final name — a copy that differs has never
+  been in the library under the real name, and a version already there stays
+  untouched until the new one is proven. This costs time: each file crosses
+  the network twice, so a transfer takes roughly twice as long. One limit
+  remains: what is read back is what Windows holds to be the file's contents;
+  the data is flushed to the server first, but whether the read is then served
+  from the network or from the local cache is up to Windows.
+- **Failed sources were only set aside when something was deleted.** Moving
+  them to `_InProgress/_Failed` hung off the deletion of verified sources, so
+  it never ran with *delete source* switched off, or when every file had
+  failed — while the report at the end named a location they were not in.
+- **Stopping a transfer waited for the current file to finish**, which for a
+  film over a slow share meant minutes. It now stops between blocks and removes
+  the partial copy.
+- **The transfer progress bar stood still during a large file.** It advanced
+  once per file; a folder holding a single film showed the same value from
+  start to end. It now follows the bytes, counting both the copy and the
+  comparison.
 - **FFmpeg downloaded by Amboss was never found.** The download put both
   programs into `%APPDATA%\Amboss\ffmpeg`, but the lookup only searched `PATH`
   and the program folder — so the *FFmpeg is missing* notice came straight back
