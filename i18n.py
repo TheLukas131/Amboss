@@ -699,6 +699,17 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Untertitel": "Subtitles",
         "Konvertiert in {time}": "Converted in {time}",
 
+        # --- Bleibende Meldung im Fenster ---
+        "Meldung schließen": "Dismiss",
+        "Konvertierung gestoppt": "Conversion stopped",
+        "{done} von {total} Dateien konvertiert. {savings}":
+            "{done} of {total} files converted. {savings}",
+
+        # --- Eingeklappte Einstellungen ---
+        "Ändern": "Change",
+        "Einklappen": "Collapse",
+        "Getrennte Presets": "Separate presets",
+
         # --- Transfer: Vergleich nach dem Kopieren ---
         "Prüfe {done}/{total}: {name}": "Verifying {done}/{total}: {name}",
 

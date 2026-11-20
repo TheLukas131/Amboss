@@ -119,7 +119,7 @@ pruefe("keine Restzeit, solange nichts laeuft", remaining_seconds(laeuft), None)
 from PyQt5.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
-from ui.queue_table import COL_NAME, COL_SIZE, COL_STATUS, COL_TARGET, QueueTable
+from ui.queue_table import COL_NAME, COL_REMOVE, COL_SIZE, QueueTable
 
 videos = [folge("A", 1, 2), film("Film"), folge("A", 1, 1)]
 tabelle = QueueTable()
@@ -128,17 +128,38 @@ pruefe("Staffel + zwei Folgen + Film", tabelle.rowCount(), 4)
 pruefe("Datei 0 steht nicht in Zeile 0", tabelle.row_of(0), 2)
 pruefe("der Film steht am Ende", tabelle.row_of(1), 3)
 pruefe("Staffel-Zeile nennt die Serie", "A" in tabelle.item(0, COL_NAME).text(), True)
-pruefe("Ziel des Films ist relativ",
-       tabelle.item(3, COL_TARGET).text(), str(Path("Filme") / "Film" / "Film.mp4"))
-pruefe("voller Pfad im Tooltip",
-       tabelle.item(3, COL_TARGET).toolTip(), str(videos[1].target_path))
+pruefe("das Ziel steht relativ im Tooltip des Namens",
+       str(Path("Filme") / "Film" / "Film.mp4") in tabelle.item(3, COL_NAME).toolTip(), True)
+pruefe("eine wartende Datei zeigt das Wort, keinen leeren Balken",
+       tabelle.state_text(3), "Wartend")
 
 videos[0].status, videos[0].progress, videos[0].new_size = FileStatus.FERTIG, 100, GB // 2
 tabelle.refresh_video(0)
-pruefe("Status landet in der Zeile der Datei", tabelle.item(2, COL_STATUS).text(), "Fertig")
-pruefe("nicht in der Zeile mit ihrer Nummer", tabelle.item(0, COL_STATUS).text(), "1/2 fertig")
+pruefe("Zustand landet in der Zeile der Datei", tabelle.state_text(2), "Fertig")
+pruefe("nicht in der Zeile mit ihrer Nummer", tabelle.state_text(0), "1/2 fertig")
 pruefe("Groesse vorher/nachher", tabelle.item(2, COL_SIZE).text(), "2.0 GB → 512 MB (−75 %)")
 tabelle.refresh_video(99)   # darf nichts tun und nicht abstuerzen
+
+videos[2].status, videos[2].progress, videos[2].encode_speed = FileStatus.VERARBEITET, 40, 0.0
+tabelle.refresh_video(2)
+pruefe("eine laufende Datei zeigt Prozent statt des Wortes", tabelle.state_text(1), "40 %")
+pruefe("und ihre Staffel, wie viele laufen", tabelle.state_text(0), "70 % · 1 laufen")
+videos[2].status, videos[2].progress = FileStatus.WARTEND, 0
+tabelle.refresh_video(2)
+
+# Der Entfernen-Knopf erscheint nur in der Zeile unter der Maus - und im Lauf gar nicht.
+def knoepfe():
+    return [bool(tabelle.cellWidget(r, COL_REMOVE))
+            and not tabelle.cellWidget(r, COL_REMOVE).button.isHidden() for r in range(4)]
+pruefe("ohne Maus kein Knopf", knoepfe(), [False] * 4)
+tabelle._set_hover_row(3)
+pruefe("Maus ueber dem Film: nur dort", knoepfe(), [False, False, False, True])
+tabelle._set_hover_row(1)
+pruefe("Maus wandert: der Knopf wandert mit", knoepfe(), [False, True, False, False])
+tabelle.set_removal_enabled(False)
+pruefe("im Lauf: kein Knopf", knoepfe(), [False] * 4)
+tabelle.set_removal_enabled(True)
+tabelle._set_hover_row(None)
 
 tabelle._on_cell_clicked(0, 0)
 pruefe("zugeklappt: Folgen weg", [tabelle.isRowHidden(r) for r in range(4)],

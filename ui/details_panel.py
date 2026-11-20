@@ -131,7 +131,8 @@ class DetailsPanel(QFrame):
         if war_offen:
             self.closed.emit()
 
-    def show_video(self, video: VideoFile, target_meta: Optional[VideoMetadata]):
+    def show_video(self, video: VideoFile, target_meta: Optional[VideoMetadata],
+                   target_text: str = ""):
         self.video = video
         source = video.source_metadata
         self.title.setText(video.source_path.name)
@@ -150,10 +151,14 @@ class DetailsPanel(QFrame):
               if video.new_size > 0 else "-")
         setze("tags", tag_line(source), tag_line(target_meta))
 
-        text = ""
+        # Typ und Ziel standen früher in jeder Zeile der Warteschlange.
+        teile = [tr(video.media_type.value)]
+        if target_text and target_text != "-":
+            teile.append("→ " + target_text)
         if video.new_size > 0 and video.conversion_start_time and video.conversion_end_time:
             dauer = video.conversion_end_time - video.conversion_start_time
-            text = tr("Konvertiert in {time}").format(time=format_duration(dauer))
+            teile.append(tr("Konvertiert in {time}").format(time=format_duration(dauer)))
+        text = "  ·  ".join(teile)
         self.error.setText(tr("Fehler: {reason}").format(reason=video.error_message)
                            if video.error_message else "")
         self.error.setVisible(bool(video.error_message))

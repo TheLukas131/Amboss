@@ -38,11 +38,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   FFmpeg itself reports; afterwards the size before and after — `2.6 GB →
   655 MB (−75 %)` — in a column of its own.
 
+- **What was done stays written in the window.** The end of a run was
+  announced by a Windows notification and a toast that vanished after four
+  seconds. A run usually ends while nobody is watching; whoever came back and
+  no longer found the notification had only the log. The result now stands at
+  the top of the page, with the time, until it is closed or a new run starts —
+  the conversion and the transfer each on a line of their own, on the
+  conversion page and in the library alike. A stopped run says *stopped*
+  rather than *finished*.
 - **The filters count.** *Waiting 4*, *Failed 1* — how many files each would
   show, without having to click through them.
 
 ### Changed
 
+- **The conversion page shows the queue, not its own controls.** The table has
+  three columns instead of seven: file, state, size. State and progress are
+  one cell — a bar with percentage and time remaining while a file runs, the
+  word otherwise — where the word *Processing* used to sit next to a bar saying
+  the same. Type and target moved to the details of a file. The remove button
+  appears in the row under the mouse only. Source, target and encoder settings
+  fold into one line once there is a queue and open again with *Change*. The
+  page heading is gone, the footer shows only the buttons that can do
+  something, and the filters appear only when there is something to filter.
 - **Details moved from their own page into the queue.** They were a second list
   of the same files on another page, to be found again and opened there. A
   click on a row now shows codec, resolution, bitrate, audio and subtitle

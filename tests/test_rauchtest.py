@@ -155,6 +155,35 @@ def einzelheiten():
         raise AssertionError("zweiter Klick hat die Einzelheiten nicht geschlossen")
 versuche("Einzelheiten zu einer Datei", einzelheiten)
 
+# Was fertig wurde, steht im Fenster und bleibt dort - auf beiden Seiten, bis
+# man es schliesst.
+def meldung_im_fenster():
+    fenster.announce("Konvertierung abgeschlossen", "3 Datei(en) fertig konvertiert.")
+    fenster.announce("Verschieben mit Fehlern", "1 verschoben, 1 fehlgeschlagen.", warning=True)
+    app.processEvents()
+    for banner in (fenster.result_banner, fenster.nas_result_banner):
+        if banner.isHidden() or [e.title for e in banner.entries()] != [
+                "Konvertierung abgeschlossen", "Verschieben mit Fehlern"]:
+            raise AssertionError("Meldung steht nicht im Fenster")
+    fenster.convert_page.grab()
+    fenster.result_banner.dismissed.emit()
+    if not (fenster.result_banner.isHidden() and fenster.nas_result_banner.isHidden()):
+        raise AssertionError("Schliessen hat die Meldung nicht entfernt")
+versuche("Bleibende Meldung im Fenster", meldung_im_fenster)
+
+# Die Einstellungen klappen zu einer Zeile zusammen, sobald eine Warteschlange da ist.
+def einstellungen_einklappen():
+    fenster._setup_collapsed = True
+    fenster._sync_setup_visibility()
+    if fenster.setup_summary_card.isHidden() or not fenster.setup_container.isHidden():
+        raise AssertionError("mit Warteschlange sollten die Einstellungen eingeklappt sein")
+    fenster._toggle_setup()
+    if fenster.setup_container.isHidden():
+        raise AssertionError("'Aendern' hat die Einstellungen nicht geoeffnet")
+    fenster.convert_page.grab()
+    fenster._toggle_setup()
+versuche("Einstellungen ein- und ausklappen", einstellungen_einklappen)
+
 # Das ganze Fenster inklusive Seitenleiste (dort sass der Acryl-Effekt)
 versuche("Gesamtes Fenster zeichnen", lambda: fenster.grab())
 versuche("Seitenleiste zeichnen", lambda: fenster.navigationInterface.grab())

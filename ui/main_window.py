@@ -30,9 +30,10 @@ from ffmpeg_processor import FFmpegProcessor
 from gpu_info import detect_gpu
 from library_dispatch import ready_folders
 from run_lock import acquire, release
-from queue_model import size_change, status_counts
+from queue_model import relative_target, size_change, status_counts
 from ui.details_panel import DetailsPanel
 from ui.queue_table import QueueTable
+from ui.result_banner import MAX_ENTRIES, ResultBanner, make_entry
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
     NUMERIC_ONLY, category_for_staging_folder, detect_season_pattern, parse_season_convention,
@@ -43,7 +44,7 @@ from inprogress_mover import (
 from merge_detector import find_truncation_candidates
 from resources import resource_path
 from models import (
-    APP_NAME, APP_TAGLINE, APP_VERSION, ANIME_KEYWORDS, CODEC_LABELS, CONTAINERS,
+    APP_NAME, APP_VERSION, ANIME_KEYWORDS, CODEC_LABELS, CONTAINERS,
     DEFAULT_CODEC, cq_maximum_for,
     CONTAINER_LABELS, DEFAULT_CONTAINER, DEFAULT_OUTPUT_FOLDER,
     FileStatus, MediaType, NAS_CATEGORIES, NASUploadItem, NASUploadStatus,
@@ -137,6 +138,9 @@ class MainWindow(FluentWindow):
         # Einmal je Programmlauf aus der Mediathek abgelesen, siehe current_season_pattern()
         self._detected_season_pattern = None
         self.nas_categories = NAS_CATEGORIES
+        # Was zuletzt fertig wurde - steht im Fenster, bis man es schliesst oder
+        # einen neuen Lauf startet (siehe announce).
+        self._results: list = []
 
         # Wird erst nach vollständigem Seitenaufbau + initialem Laden der
         # Einstellungen auf True gesetzt. Verhindert, dass die während des
@@ -701,8 +705,27 @@ class MainWindow(FluentWindow):
         toolbar_row.setSpacing(8)
         self.stats_label = StrongBodyLabel(tr("Warteschlange"))
         toolbar_row.addWidget(self.stats_label)
-        toolbar_row.addStretch()
+        # Die Bilanz steht bei dem, was sie beschreibt - vorher in der
+        # Fusszeile, als eigene Zeile.
+        self.stats_summary_label = CaptionLabel("")
+        # Nimmt, was übrig bleibt, und verlangt selbst nichts: ein langer Text
+        # darf die Seite nicht breiter machen als das Fenster.
+        # Ausdrücklich als HTML: die Bilanz färbt die Fehlerzahl ein, und ohne
+        # diese Angabe rät Qt am Text, ob er HTML ist - bei einer Bilanz ohne
+        # Fehler riet es falsch und zeigte die Trennzeichen als "&nbsp;".
+        self.stats_summary_label.setTextFormat(Qt.RichText)
+        self.stats_summary_label.setMinimumWidth(0)
+        self.stats_summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        toolbar_row.addWidget(self.stats_summary_label, 1)
 
+        # Die Filter stehen in einer eigenen Zeile unter der Kopfzeile - und
+        # nur, wenn es etwas zu filtern gibt (siehe _refresh_queue_summary).
+        # In derselben Zeile wie Titel, Bilanz und Knöpfe passten sie bei
+        # schmalem Fenster nicht mehr hinein.
+        self.filter_bar = QWidget()
+        filter_row = QHBoxLayout(self.filter_bar)
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(8)
         self.filter_group = QButtonGroup(self)
         self.filter_group.setExclusive(True)
         self._filter_buttons = {}
@@ -716,9 +739,9 @@ class MainWindow(FluentWindow):
             self.filter_group.addButton(btn)
             self._filter_buttons[key] = btn
             self._filter_labels[key] = label
-            toolbar_row.addWidget(btn)
-
-        toolbar_row.addSpacing(12)
+            filter_row.addWidget(btn)
+        filter_row.addStretch()
+        self.filter_bar.setVisible(False)
 
         self.scan_btn = PushButton(tr("Dateien scannen"))
         self.scan_btn.clicked.connect(self.scan_files)
@@ -745,6 +768,7 @@ class MainWindow(FluentWindow):
         toolbar_row.addWidget(self.clear_list_btn)
 
         files_layout.addLayout(toolbar_row)
+        files_layout.addWidget(self.filter_bar)
 
         # Aufbau und Inhalt der Tabelle: ui/queue_table.py. Eine Zeile ist dort
         # nicht mehr der Index der Datei - angesprochen wird eine Datei über
@@ -768,10 +792,8 @@ class MainWindow(FluentWindow):
         controls_layout.setContentsMargins(18, 14, 18, 14)
         controls_layout.setSpacing(12)
 
-        # Oben, was man während eines Laufs wissen will: wie weit, wie viele,
-        # wie lange noch. Darunter die Bilanz in einer Zeile - vorher waren es
-        # sechs Felder, von denen zwei den ganzen Lauf über "läuft noch..."
-        # anzeigten.
+        # Was man während eines Laufs wissen will: wie weit, wie viele, wie
+        # lange noch.
         progress_row = QHBoxLayout()
         progress_row.setSpacing(14)
         self.total_progress = ProgressBar()
@@ -783,9 +805,6 @@ class MainWindow(FluentWindow):
         self.eta_label = BodyLabel(tr("Verbleibend: --:--:--"))
         progress_row.addWidget(self.eta_label)
         controls_layout.addLayout(progress_row)
-
-        self.stats_summary_label = CaptionLabel("")
-        controls_layout.addWidget(self.stats_summary_label)
 
         controls_row = QHBoxLayout()
         controls_row.setSpacing(10)
@@ -812,23 +831,87 @@ class MainWindow(FluentWindow):
         controls_row.addWidget(self.stop_btn)
 
         controls_layout.addLayout(controls_row)
+        self._sync_run_buttons(False)
         return card
+
+    def _sync_run_buttons(self, running: bool):
+        """Zeigt nur die Knöpfe, die gerade etwas tun können: vor dem Lauf
+        "Starten", währenddessen "Pause" und "Stoppen". Vorher standen immer
+        alle drei da, davon mindestens einer ausgegraut."""
+        self.start_btn.setVisible(not running)
+        self.pause_btn.setVisible(running)
+        self.stop_btn.setVisible(running)
+
+    def _build_setup_summary(self) -> CardWidget:
+        """Die eingeklappte Fassung von Quelle, Ziel und Encoder: eine Zeile."""
+        self._setup_collapsed = False
+        self.setup_summary_card = CardWidget()
+        row = QHBoxLayout(self.setup_summary_card)
+        row.setContentsMargins(18, 10, 12, 10)
+        row.setSpacing(12)
+        self.setup_summary_label = BodyLabel("")
+        self.setup_summary_label.setMinimumWidth(0)
+        self.setup_summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        row.addWidget(self.setup_summary_label, 1)
+        self.setup_toggle_btn = PushButton(tr("Ändern"))
+        self.setup_toggle_btn.clicked.connect(self._toggle_setup)
+        row.addWidget(self.setup_toggle_btn)
+        self.setup_summary_card.setVisible(False)
+        return self.setup_summary_card
+
+    def _toggle_setup(self):
+        self._setup_collapsed = not self._setup_collapsed
+        self._sync_setup_visibility()
+
+    def _sync_setup_visibility(self):
+        """Ohne Warteschlange stehen die Einstellungen offen da - dann ist
+        Einstellen das, was als Nächstes zu tun ist. Mit Warteschlange gibt es
+        die Zeile, und die Einstellungen sind nur auf Wunsch offen."""
+        hat_dateien = bool(self.videos)
+        self.setup_summary_card.setVisible(hat_dateien)
+        self.setup_container.setVisible(not hat_dateien or not self._setup_collapsed)
+        self.setup_toggle_btn.setText(tr("Ändern") if self._setup_collapsed else tr("Einklappen"))
+        if hat_dateien:
+            self._refresh_setup_summary()
+
+    def _refresh_setup_summary(self):
+        kurz = {"av1_nvenc": "AV1", "hevc_nvenc": "H.265", "h264_nvenc": "H.264"}
+        if self.separate_presets_check.isChecked():
+            encoder = tr("Getrennte Presets")
+        else:
+            codec = self.codec_combo.currentData() or DEFAULT_CODEC
+            encoder = (f"{kurz.get(codec, codec)} · {self.preset_combo.currentData()} · "
+                       f"CQ {self.crf_slider.value()}")
+        container = (self.container_combo.currentData() or DEFAULT_CONTAINER).upper()
+        source = self.source_input.text().strip() or "-"
+        target = self.target_input.text().strip() or "-"
+        self.setup_summary_label.setText(f"{source}  →  {target}   ·   {encoder} · {container}")
+        self.setup_summary_label.setToolTip(self.setup_summary_label.text())
 
     def _build_convert_page(self) -> QWidget:
         page = ScrollablePage("convertPage")
         outer = page.content_layout
 
-        title_row = QHBoxLayout()
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
-        title_col.addWidget(TitleLabel(tr("Konvertierung")))
-        title_col.addWidget(CaptionLabel(tr(APP_TAGLINE)))
-        title_row.addLayout(title_col)
-        title_row.addStretch()
-        outer.addLayout(title_row)
+        self.result_banner = ResultBanner()
+        self.result_banner.dismissed.connect(self._clear_results)
+        outer.addWidget(self.result_banner)
 
-        outer.addLayout(self._build_source_target_row())
-        outer.addWidget(self._build_encoding_card())
+        # Keine Überschrift mehr: "Konvertierung" steht in der Navigation
+        # daneben, und was das Programm tut, weiss man nach dem ersten Start.
+
+        # Quelle, Ziel und Encoder-Einstellungen. Sobald eine Warteschlange
+        # da ist, klappen sie zu einer Zeile zusammen (siehe
+        # _sync_setup_visibility) - eingestellt wird vor dem Lauf, während des
+        # Laufs belegten sie ein Drittel der Seite, ohne dass man sie anfasst.
+        outer.addWidget(self._build_setup_summary())
+        self.setup_container = QWidget()
+        setup_layout = QVBoxLayout(self.setup_container)
+        setup_layout.setContentsMargins(0, 0, 0, 0)
+        setup_layout.setSpacing(outer.spacing())
+        setup_layout.addLayout(self._build_source_target_row())
+        setup_layout.addWidget(self._build_encoding_card())
+        outer.addWidget(self.setup_container)
+
         outer.addWidget(self._build_queue_card(), 1)
         outer.addWidget(self._build_action_bar())
 
@@ -845,6 +928,10 @@ class MainWindow(FluentWindow):
         outer = page.content_layout
 
         outer.addWidget(TitleLabel(tr("Mediathek")))
+
+        self.nas_result_banner = ResultBanner()
+        self.nas_result_banner.dismissed.connect(self._clear_results)
+        outer.addWidget(self.nas_result_banner)
 
         header_layout = self._card(outer, tr("Fertige Medien einsortieren"))
         desc_label = CaptionLabel(tr(
@@ -1094,6 +1181,8 @@ class MainWindow(FluentWindow):
         genau wie die Windows-11-Einstellungen-App - kein separater Speichern-Knopf."""
         if self._ui_ready:
             self._save_current_settings()
+            if self.videos:
+                self._refresh_setup_summary()
 
     def _on_encoder_selection_changed(self, *_args):
         self._refresh_encoder_availability()
@@ -1196,6 +1285,29 @@ class MainWindow(FluentWindow):
         box.cancelButton.hide()
         box.yesButton.setText(tr("OK"))
         box.exec_()
+
+    def announce(self, title: str, message: str, warning: bool = False):
+        """Sagt, dass etwas fertig ist - im Fenster und über Windows.
+
+        Im Fenster bleibt die Meldung stehen (siehe ui/result_banner.py); die
+        Windows-Benachrichtigung ist für den Fall, dass das Fenster nicht zu
+        sehen ist. Vorher gab es nur die Benachrichtigung und eine Einblendung
+        von vier Sekunden - wer beides verpasste, sah dem Fenster nicht an, ob
+        und wann der Lauf zu Ende gegangen war."""
+        self._results = (self._results + [make_entry(title, message, warning)])[-MAX_ENTRIES:]
+        self._refresh_result_banners()
+        self.notify_system(title, message, warning)
+
+    def _clear_results(self):
+        self._results = []
+        self._refresh_result_banners()
+
+    def _refresh_result_banners(self):
+        # Auf beiden Seiten dieselbe Meldung: nach dem Verschieben steht man
+        # auf der Mediathek, nach einer reinen Konvertierung auf der
+        # Konvertierungsseite.
+        for banner in (self.result_banner, self.nas_result_banner):
+            banner.set_entries(self._results)
 
     def _toast_success(self, title: str, content: str):
         InfoBar.success(title, content, duration=4000, position=InfoBarPosition.TOP, parent=self)
@@ -1582,6 +1694,11 @@ class MainWindow(FluentWindow):
                     break
 
         delete_after = self.nas_delete_check.isChecked()
+        if not skip_confirmation:
+            # Von Hand gestartet: was vom letzten Lauf noch dasteht, ist vorbei.
+            # Beim automatischen Verschieben gehört die Meldung der
+            # Konvertierung dagegen zum selben Lauf und bleibt stehen.
+            self._clear_results()
         self.nas_worker = NASUploadWorker(items, self.active_category_folders(), delete_after)
         self.nas_worker.progress_updated.connect(self.on_nas_progress_updated)
         self.nas_worker.item_completed.connect(self.on_nas_item_completed)
@@ -1664,7 +1781,7 @@ class MainWindow(FluentWindow):
         self.log(f"\n{'=' * 50}\nLibrary transfer finished\nSucceeded: {completed}\nFailed: {failed}\n{'=' * 50}\n")
 
         if failed > 0:
-            self.notify_system(
+            self.announce(
                 tr("Verschieben mit Fehlern"),
                 tr("{done} verschoben, {failed} fehlgeschlagen. Lokale Ordner bleiben erhalten.")
                 .format(done=completed, failed=failed),
@@ -1672,7 +1789,7 @@ class MainWindow(FluentWindow):
             )
             self._toast_warning(tr("Upload mit Fehlern"), tr("{count} Medium/Medien konnten nicht verschoben werden.").format(count=failed))
         else:
-            self.notify_system(
+            self.announce(
                 tr("Verschieben abgeschlossen"),
                 tr("{count} Medium/Medien in die Mediathek verschoben.").format(count=completed),
             )
@@ -1737,7 +1854,7 @@ class MainWindow(FluentWindow):
             if erledigt:
                 self.switchTo(self.nas_page)
                 self._refresh_library_after_upload(erledigt)
-                self.notify_system(
+                self.announce(
                     tr("Verschieben abgeschlossen"),
                     tr("{count} Medium/Medien in die Mediathek verschoben.")
                     .format(count=erledigt),
@@ -2235,6 +2352,8 @@ class MainWindow(FluentWindow):
             self.settings.set("detected_season_pattern", result.season_pattern)
             self.settings.save()
         self.videos = result.videos
+        # Ab hier geht es um die Warteschlange, nicht mehr ums Einstellen.
+        self._setup_collapsed = bool(self.videos)
 
         # Erst jetzt, nachdem der Scan durch ist: das Aufräumen liegengebliebener
         # Temp-Dateien durchsucht den Zielordner rekursiv und hat mit dem
@@ -2259,11 +2378,28 @@ class MainWindow(FluentWindow):
         self._refresh_queue_summary()
 
     def _refresh_queue_summary(self):
-        """Zähler an den Filtern: wie viele Dateien jeder zeigen würde."""
+        """Zähler an den Filtern: wie viele Dateien jeder zeigen würde.
+
+        Ein Filter, der nichts zeigen würde, steht nicht da. Solange alle
+        Dateien denselben Zustand haben - vor dem Start: alle wartend - gibt es
+        nichts zu filtern und damit gar keine Filter."""
         counts = status_counts(self.videos)
+        belegt = [key for key in counts if key != "all" and counts[key]]
+        gefiltert = self.current_filter != "all"
+        irgendeiner = False
         for key, btn in self._filter_buttons.items():
             label = self._filter_labels[key]
             btn.setText(f"{label}  {counts[key]}" if self.videos else label)
+            if key == "all":
+                sichtbar = len(belegt) > 1 or gefiltert
+            else:
+                # Der gewählte Filter bleibt stehen, auch wenn er gerade leer
+                # läuft - sonst verschwände der Knopf, auf dem man steht.
+                sichtbar = (len(belegt) > 1 and bool(counts[key])) or key == self.current_filter
+            btn.setVisible(sichtbar)
+            irgendeiner = irgendeiner or sichtbar
+        self.filter_bar.setVisible(irgendeiner)
+        self._sync_setup_visibility()
 
     def _toggle_details(self, video: VideoFile):
         """Klick auf eine Zeile: Einzelheiten zeigen - ein zweiter Klick auf
@@ -2279,7 +2415,10 @@ class MainWindow(FluentWindow):
         target_meta = None
         if video.target_path and video.target_path.exists():
             target_meta = video.target_metadata or self.ffmpeg.get_video_metadata(video.target_path)
-        self.details_panel.show_video(video, target_meta)
+        target = self.target_input.text().strip()
+        self.details_panel.show_video(
+            video, target_meta,
+            relative_target(video.target_path, Path(target) if target else None))
 
     def _refresh_details_panel(self):
         """Hält die offenen Einzelheiten aktuell, oder schließt sie, wenn die
@@ -2328,8 +2467,8 @@ class MainWindow(FluentWindow):
         errors = sum(1 for v in self.videos if v.status == FileStatus.FEHLER)
         converted = [v for v in self.videos if v.new_size > 0]
 
-        teile = [tr("{count} Dateien · {size}").format(
-            count=total, size=self.format_size(sum(v.original_size for v in self.videos)))]
+        # Die Anzahl steht direkt davor in der Kopfzeile der Warteschlange.
+        teile = [self.format_size(sum(v.original_size for v in self.videos))]
         if converted:
             before = sum(v.original_size for v in converted)
             after = sum(v.new_size for v in converted)
@@ -2340,7 +2479,7 @@ class MainWindow(FluentWindow):
             farbe = dunkel if isDarkTheme() else hell
             teile.append(f'<span style="color:{farbe}">'
                          + tr("{count} fehlgeschlagen").format(count=errors) + "</span>")
-        self.stats_summary_label.setText(" &nbsp;·&nbsp; ".join(teile))
+        self.stats_summary_label.setText("·&nbsp; " + " &nbsp;·&nbsp; ".join(teile))
 
     @staticmethod
     def format_size(size_bytes: int) -> str:
@@ -2521,9 +2660,11 @@ class MainWindow(FluentWindow):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.pause_btn.setEnabled(True)
+        self._sync_run_buttons(True)
         self.scan_btn.setEnabled(False)
         self.clear_list_btn.setEnabled(False)
 
+        self._clear_results()
         self.conversion_start_time = time.time()
         self.completed_files_durations.clear()
         self._resolution_speeds.clear()
@@ -2914,6 +3055,7 @@ class MainWindow(FluentWindow):
         self.stop_btn.setEnabled(False)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText(tr("Pause"))
+        self._sync_run_buttons(False)
         self.scan_btn.setEnabled(True)
         self.clear_list_btn.setEnabled(True)
         self.eta_timer.stop()
@@ -2953,7 +3095,7 @@ class MainWindow(FluentWindow):
             prune_empty_inprogress_dirs(Path(os.path.normpath(source)))
 
         if failed > 0:
-            self.notify_system(
+            self.announce(
                 tr("Konvertierung mit Fehlern abgeschlossen"),
                 tr("{done} erfolgreich, {failed} fehlgeschlagen. Details im Protokoll.")
                 .format(done=completed, failed=failed),
@@ -2965,13 +3107,26 @@ class MainWindow(FluentWindow):
             gescheitert = [v for v in self.videos if v.status == FileStatus.FEHLER]
             FailureReportDialog(gescheitert, completed, self).exec()
         else:
-            saving_text = savings_line.replace("\n", " ").strip() or ""
-            self.notify_system(
-                tr("Konvertierung abgeschlossen"),
-                tr("{count} Datei(en) fertig konvertiert. {savings}")
-                .format(count=completed, savings=saving_text).strip(),
-            )
-            self._toast_success(tr("Konvertierung abgeschlossen"), tr("{count} Datei(en) erfolgreich konvertiert.").format(count=completed))
+            converted = [v for v in self.videos if v.new_size > 0]
+            saving_text = (size_change(sum(v.original_size for v in converted),
+                                       sum(v.new_size for v in converted))
+                           if converted else "")
+            if was_stopped:
+                # "Abgeschlossen" wäre hier falsch: es wurde abgebrochen, und
+                # was noch wartet, ist nicht konvertiert.
+                self.announce(
+                    tr("Konvertierung gestoppt"),
+                    tr("{done} von {total} Dateien konvertiert. {savings}")
+                    .format(done=completed, total=len(self.videos), savings=saving_text).strip(),
+                    warning=True,
+                )
+            else:
+                self.announce(
+                    tr("Konvertierung abgeschlossen"),
+                    tr("{count} Datei(en) fertig konvertiert. {savings}")
+                    .format(count=completed, savings=saving_text).strip(),
+                )
+                self._toast_success(tr("Konvertierung abgeschlossen"), tr("{count} Datei(en) erfolgreich konvertiert.").format(count=completed))
 
         self._check_for_truncated_name_duplicates()
 
