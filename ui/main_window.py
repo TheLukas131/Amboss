@@ -670,6 +670,17 @@ class MainWindow(FluentWindow):
         container_row.addWidget(self.container_combo, 1)
         options_grid.addLayout(container_row, 2, 0, 1, 2)
 
+        self.split_encode_check = CheckBox(tr("Einzelne Datei auf alle Encoder-Einheiten verteilen"))
+        self.split_encode_check.setToolTip(tr(
+            "Eine Konvertierung belegt sonst nur eine Encoder-Einheit der Grafikkarte. "
+            "Läuft eine Datei allein, wird sie mit dieser Option auf alle Einheiten "
+            "verteilt (Split Frame Encoding) und entsprechend schneller fertig. "
+            "Gilt für AV1 und H.265, kostet etwas Kompression und braucht FFmpeg 7.1 "
+            "oder neuer. Laufen mehrere Dateien gleichzeitig, ändert sich nichts."
+        ))
+        self.split_encode_check.toggled.connect(self._on_convert_control_changed)
+        options_grid.addWidget(self.split_encode_check, 3, 0, 1, 2)
+
         encoding_layout.addLayout(options_grid)
 
     def _build_queue_card(self) -> CardWidget:
@@ -1036,6 +1047,10 @@ class MainWindow(FluentWindow):
         if idx >= 0:
             self.container_combo.setCurrentIndex(idx)
         self.normalize_check.setChecked(self.settings.get("normalize_audio"))
+        self.split_encode_check.setChecked(bool(self.settings.get("split_frame_encoding")))
+        # Mit nur einer Encoder-Einheit gibt es nichts zu verteilen. Bei einer
+        # unbekannten Karte bleibt die Wahl offen - der Versuch schadet nicht.
+        self.split_encode_check.setEnabled(self.gpu_info.encoder_units != 1)
         self.rename_check.setChecked(self.settings.get("rename_enabled"))
         self.delete_source_check.setChecked(self.settings.get("delete_source_after_convert"))
         self.nas_delete_check.setChecked(self.settings.get("delete_local_after_nas_move"))
@@ -1066,6 +1081,7 @@ class MainWindow(FluentWindow):
             "parallel_tasks": self.parallel_spin.value(),
             "container": self.container_combo.currentData(),
             "normalize_audio": self.normalize_check.isChecked(),
+            "split_frame_encoding": self.split_encode_check.isChecked(),
             "rename_enabled": self.rename_check.isChecked(),
             "delete_source_after_convert": self.delete_source_check.isChecked(),
             "delete_local_after_nas_move": self.nas_delete_check.isChecked(),
@@ -2662,6 +2678,8 @@ class MainWindow(FluentWindow):
             "container": self.container_combo.currentData(),
             "normalize_audio": self.normalize_check.isChecked(),
             "delete_source_after_convert": self.delete_source_check.isChecked(),
+            "split_frame_encoding": self.split_encode_check.isChecked(),
+            "encoder_units": self.gpu_info.encoder_units,
         }
         for bucket in PRESET_BUCKETS:
             settings[f"cq_{bucket}"] = getattr(self, f"crf_slider_{bucket}").value()

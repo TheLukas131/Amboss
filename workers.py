@@ -28,7 +28,9 @@ from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from ffmpeg_processor import FFmpegProcessor, chroma_fallback, text_subtitle_indices
+from ffmpeg_processor import (
+    FFmpegProcessor, chroma_fallback, text_subtitle_indices, use_split_encode,
+)
 from i18n import tr
 from run_lock import held_by_other
 from models import (
@@ -197,6 +199,12 @@ class ConversionWorker(QThread):
         # Erfolgreich konvertierte und geprüfte Dateien; gelöscht wird erst am
         # Ende des Laufs, siehe _delete_pending_sources.
         self._pending_source_deletions: List[VideoFile] = []
+        # Für die Entscheidung, ob eine Datei allein läuft (siehe _concurrent_encodes).
+        self._max_workers = 1
+        self._open_tasks = 0
+        # Nach einem Fehlschlag mit verteiltem Encoding wird es für den Rest
+        # des Laufs nicht noch einmal versucht.
+        self._split_encode_failed = False
 
     def stop(self):
         self._stop_requested = True
@@ -227,12 +235,17 @@ class ConversionWorker(QThread):
         try:
             _keep_system_awake(True)
             max_workers = self.settings.get("parallel_tasks", 3)
+            anstehend = [(idx, video) for idx, video in enumerate(self.videos)
+                         if video.status != FileStatus.UEBERSPRUNGEN]
+            # Vor dem Einreihen festhalten: die ersten Tasks laufen schon los,
+            # während die übrigen noch eingereiht werden.
+            self._max_workers = max(int(max_workers), 1)
+            self._open_tasks = len(anstehend)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(self._process_video, idx, video): idx
-                    for idx, video in enumerate(self.videos)
-                    if video.status != FileStatus.UEBERSPRUNGEN
+                    executor.submit(self._run_task, idx, video): idx
+                    for idx, video in anstehend
                 }
                 for future in as_completed(futures):
                     try:
@@ -271,6 +284,68 @@ class ConversionWorker(QThread):
                 # Auch beim Stoppen zuerst fortsetzen - ein angehaltener Prozess
                 # soll nie als Waise zurückbleiben.
                 _set_process_suspended(process.pid, False)
+
+    def _run_task(self, idx: int, video: VideoFile):
+        try:
+            self._process_video(idx, video)
+        finally:
+            with self._lock:
+                self._open_tasks -= 1
+
+    def _concurrent_encodes(self) -> int:
+        """Wie viele Dateien gleichzeitig laufen, die gerade startende mitgezählt.
+
+        Gezählt wird, was noch offen ist, begrenzt auf die Zahl der Plätze: was
+        noch wartet, startet gleich daneben. Im Zweifel fällt die Zahl damit zu
+        hoch aus - lieber eine Datei ohne verteiltes Encoding als zwei, die
+        sich die Einheiten streitig machen."""
+        with self._lock:
+            return min(self._max_workers, self._open_tasks)
+
+    def _encode(self, idx: int, video: VideoFile, cmd: List[str], duration: float):
+        """Lässt ffmpeg laufen und meldet den Fortschritt.
+
+        Gibt (Rückgabewert, letzte Zeilen der Fehlerausgabe) zurück."""
+        process = subprocess.Popen(
+            cmd,
+            # Nicht PIPE: stdout wird nirgends gelesen, ein volllaufender
+            # Puffer würde ffmpeg dauerhaft blockieren.
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            creationflags=_CREATIONFLAGS,
+        )
+
+        with self._lock:
+            self._processes[idx] = process
+
+        stderr_tail = deque(maxlen=40)
+        for line in process.stderr:
+            stderr_tail.append(line)
+
+            if self._stop_requested:
+                process.terminate()
+                break
+
+            self._wait_while_paused(process)
+
+            time_match = _TIME_RE.search(line)
+            if time_match:
+                h, m, s = time_match.groups()
+                current_time = int(h) * 3600 + int(m) * 60 + float(s)
+                if duration > 0:
+                    progress = min(int((current_time / duration) * 100), 99)
+                    self.progress_updated.emit(idx, progress, tr("Konvertiere... {progress}%").format(progress=progress))
+
+            if "fps=" in line:
+                self.log_message.emit(f"[{video.source_path.name}] {line.strip()}")
+
+        process.wait()
+
+        with self._lock:
+            self._processes.pop(idx, None)
+
+        return process.returncode, stderr_tail
 
     def _process_video(self, idx: int, video: VideoFile):
         # Sofortiger Ausstieg, falls "Stoppen" gedrückt wurde, während diese Task
@@ -338,10 +413,27 @@ class ConversionWorker(QThread):
                 (video.source_metadata.pixel_format if video.source_metadata else "")
                 or self.ffmpeg.pixel_format(video.source_path)
             )
-            cmd = self.ffmpeg.build_command(
-                video, cq, preset, self.settings["normalize_audio"], codec, temp_path,
-                subtitle_indices, source_pixel_format,
+            # Läuft die Datei allein, bekommt sie alle Encoder-Einheiten der
+            # Karte statt einer. Das betrifft die einzelne Datei und jeden Lauf
+            # mit nur einem parallelen Task. Entschieden wird beim Start und
+            # gilt dann für die ganze Datei: wer als letzte eines Stapels übrig
+            # bleibt, während die anderen fertig werden, läuft unverteilt zu
+            # Ende - umschalten lässt sich ein laufender Encoder nicht.
+            split_encode = (
+                bool(self.settings.get("split_frame_encoding"))
+                and not self._split_encode_failed
+                and use_split_encode(codec, self.settings.get("encoder_units"),
+                                     self._concurrent_encodes())
+                and self.ffmpeg.supports_split_encode(codec)
             )
+
+            def befehl(verteilt: bool) -> List[str]:
+                return self.ffmpeg.build_command(
+                    video, cq, preset, self.settings["normalize_audio"], codec, temp_path,
+                    subtitle_indices, source_pixel_format, verteilt,
+                )
+
+            cmd = befehl(split_encode)
 
             # Womit die Ausgabe später verglichen wird. Muss vor dem Encode
             # feststehen: danach ist die Quelle unter Umständen schon verschoben.
@@ -365,6 +457,11 @@ class ConversionWorker(QThread):
                     f"{codec} cannot encode - converting chroma to {chroma_ersatz} "
                     f"(bit depth kept)"
                 )
+            if split_encode:
+                self.log_message.emit(
+                    f"[{video.source_path.name}] runs alone - spreading it across all "
+                    f"encoder units of the card (split frame encoding)"
+                )
             self.log_message.emit(f"FFmpeg command: {' '.join(cmd)}")
 
             # Die Dauer wurde beim Scannen schon per ffprobe ermittelt - kein Grund,
@@ -375,44 +472,21 @@ class ConversionWorker(QThread):
                 else self.ffmpeg.get_duration(video.source_path)
             )
 
-            process = subprocess.Popen(
-                cmd,
-                # Nicht PIPE: stdout wird nirgends gelesen, ein volllaufender
-                # Puffer würde ffmpeg dauerhaft blockieren.
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-                creationflags=_CREATIONFLAGS,
-            )
+            returncode, stderr_tail = self._encode(idx, video, cmd, duration)
 
-            with self._lock:
-                self._processes[idx] = process
-
-            stderr_tail = deque(maxlen=40)
-            for line in process.stderr:
-                stderr_tail.append(line)
-
-                if self._stop_requested:
-                    process.terminate()
-                    break
-
-                self._wait_while_paused(process)
-
-                time_match = _TIME_RE.search(line)
-                if time_match:
-                    h, m, s = time_match.groups()
-                    current_time = int(h) * 3600 + int(m) * 60 + float(s)
-                    if duration > 0:
-                        progress = min(int((current_time / duration) * 100), 99)
-                        self.progress_updated.emit(idx, progress, tr("Konvertiere... {progress}%").format(progress=progress))
-
-                if "fps=" in line:
-                    self.log_message.emit(f"[{video.source_path.name}] {line.strip()}")
-
-            process.wait()
-
-            with self._lock:
-                self._processes.pop(idx, None)
+            if split_encode and returncode != 0 and not self._stop_requested:
+                # Verteiltes Encoding ist eine Zugabe, kein Muss: lehnt Treiber
+                # oder Karte es ab, läuft die Datei auf dem normalen Weg - und
+                # der Rest des Laufs versucht es nicht noch einmal.
+                self._split_encode_failed = True
+                self.log_message.emit(
+                    f"WARNING: [{video.source_path.name}] split frame encoding failed "
+                    f"(exit code {returncode}) - retrying without it: "
+                    f"{_erklaere_fehler(''.join(stderr_tail), None)}"
+                )
+                self._cleanup_temp(temp_path)
+                self.progress_updated.emit(idx, 0, tr("Starte Konvertierung..."))
+                returncode, stderr_tail = self._encode(idx, video, befehl(False), duration)
 
             video.conversion_end_time = time.time()
 
@@ -422,7 +496,7 @@ class ConversionWorker(QThread):
                 self.file_completed.emit(idx, False, "Abgebrochen")
                 return
 
-            if process.returncode == 0 and temp_path.exists():
+            if returncode == 0 and temp_path.exists():
                 temp_path.replace(video.target_path)
 
                 complete, reason = self._verify_output(video, duration, expected_streams)
@@ -454,7 +528,7 @@ class ConversionWorker(QThread):
                 error_output = "".join(stderr_tail) or "Unbekannter Fehler"
                 video.error_message = _erklaere_fehler(error_output, video.target_path)
                 self._cleanup_temp(temp_path)
-                self.file_completed.emit(idx, False, f"FFmpeg Fehler: {process.returncode}")
+                self.file_completed.emit(idx, False, f"FFmpeg Fehler: {returncode}")
                 self.log_message.emit(f"ERROR: {error_output}")
 
         except Exception as e:

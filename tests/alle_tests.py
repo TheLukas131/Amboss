@@ -20,6 +20,7 @@ REIHEN = [
     ("Echte Konvertierung", "test_konvertierung.py"),
     ("Getrennte Presets: was gilt, sieht man", "test_getrennte_presets.py"),
     ("Abgleich Quelle/Ergebnis", "test_abgleich.py"),
+    ("Split Frame Encoding", "test_split_encoding.py"),
 ]
 
 RAUSCHEN = re.compile(r"QFontDatabase|Note that Qt|QFluentWidgets Pro|^\s*$")

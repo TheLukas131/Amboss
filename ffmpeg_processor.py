@@ -73,6 +73,41 @@ CHROMA_FALLBACK = {
 _NEEDS_420 = ("av1_nvenc",)
 
 
+# Encoder, die ein einzelnes Bild auf mehrere NVENC-Einheiten verteilen können
+# ("Split Frame Encoding").
+#
+# Eine Konvertierung belegt sonst genau eine Encoder-Einheit - auf einer Karte
+# mit dreien liegen bei einer einzelnen Datei zwei brach. Mit dieser Option
+# teilt der Treiber jedes Bild in waagerechte Streifen und lässt die Einheiten
+# gleichzeitig daran arbeiten. Das gibt es nur für H.265 und AV1; H.264 kann
+# es nicht.
+SPLIT_ENCODE_CODECS = ("av1_nvenc", "hevc_nvenc")
+
+# 'forced' überlässt dem Treiber die Zahl der Streifen. FFmpegs Voreinstellung
+# ist 'auto', bei der der Treiber je nach Preset selbst entscheidet, ob er
+# überhaupt teilt.
+SPLIT_ENCODE_MODE = "forced"
+
+
+def use_split_encode(codec: str, encoder_units: Optional[int],
+                     concurrent_encodes: int) -> bool:
+    """Ob eine Datei auf alle Encoder-Einheiten verteilt werden soll.
+
+    Nur wenn sie allein läuft. Laufen mehrere Dateien nebeneinander, sind die
+    Einheiten bereits verteilt - jede Datei hat ihre eigene, und das ist der
+    bessere Zustand: das Teilen kostet etwas Kompression an den Streifengrenzen,
+    die parallele Verarbeitung kostet nichts.
+
+    Eine Karte mit bekannter Ausstattung braucht mindestens zwei Einheiten.
+    Bei einer unbekannten Karte (`None`) wird es versucht - der Aufrufer fällt
+    bei einem Fehlschlag auf den normalen Weg zurück."""
+    if codec not in SPLIT_ENCODE_CODECS:
+        return False
+    if encoder_units is not None and encoder_units < 2:
+        return False
+    return concurrent_encodes <= 1
+
+
 def _bittiefe(stream: dict) -> int:
     """Bittiefe einer Videospur. 0, wenn nicht zu ermitteln.
 
@@ -152,6 +187,7 @@ class FFmpegProcessor:
     def __init__(self):
         self._encoder_cache: Optional[str] = None
         self._available: Optional[bool] = None
+        self._split_encode_support: Dict[str, bool] = {}
         # Beide Programme gleichzeitig suchen statt nacheinander. Jede Suche ist
         # ein Prozessstart, und der Konstruktor läuft beim Programmstart im
         # Oberflächen-Thread - vorher waren es dort vier Starts hintereinander
@@ -249,6 +285,26 @@ class FFmpegProcessor:
         if self._encoder_cache is None:
             return False
         return encoder in self._encoder_cache
+
+    def supports_split_encode(self, codec: str) -> bool:
+        """Ob dieses FFmpeg die Option '-split_encode_mode' für den Encoder kennt.
+
+        Sie kam im April 2024 dazu. Ein älteres FFmpeg bricht mit
+        'Unrecognized option' ab, statt sie zu übergehen - deshalb wird gefragt,
+        bevor sie in einen Befehl gerät. Einmal je Encoder und Programmlauf."""
+        if codec not in SPLIT_ENCODE_CODECS:
+            return False
+        if codec not in self._split_encode_support:
+            try:
+                result = subprocess.run(
+                    [self.ffmpeg_path, "-hide_banner", "-h", f"encoder={codec}"],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=_CREATIONFLAGS,
+                )
+                self._split_encode_support[codec] = "split_encode_mode" in result.stdout
+            except (subprocess.SubprocessError, OSError):
+                return False
+        return self._split_encode_support[codec]
 
     def get_text_subtitle_indices(self, filepath: Path) -> List[int]:
         """Gibt die Positionen der textbasierten Untertitelspuren zurück (gezählt
@@ -434,7 +490,8 @@ class FFmpegProcessor:
     def build_command(self, video: VideoFile, cq: int, preset: str,
                        normalize_audio: bool, codec: str, output_path: Path,
                        text_subtitle_indices: Optional[List[int]] = None,
-                       source_pixel_format: Optional[str] = None) -> List[str]:
+                       source_pixel_format: Optional[str] = None,
+                       split_encode: bool = False) -> List[str]:
         """Erstellt den FFmpeg-Befehl.
 
         NVENC verwendet '-cq' für Constant Quality (nicht '-crf') und '-preset'
@@ -456,6 +513,10 @@ class FFmpegProcessor:
         nur für Encoder, die es überhaupt betrifft (siehe CHROMA_FALLBACK). Der
         Aufrufer gibt es mit, wenn er den Wert schon kennt oder protokollieren
         will, was umgerechnet wird.
+
+        `split_encode` verteilt die Datei auf alle Encoder-Einheiten der Karte
+        (siehe SPLIT_ENCODE_CODECS). Ob das FFmpeg die Option kennt, prüft der
+        Aufrufer mit supports_split_encode - hier wird sie nur gesetzt.
         """
         is_mkv = output_path.suffix.lower() == ".mkv"
 
@@ -484,6 +545,9 @@ class FFmpegProcessor:
             "-cq", str(cq),
             "-preset", preset,
         ])
+
+        if split_encode and codec in SPLIT_ENCODE_CODECS:
+            cmd.extend(["-split_encode_mode", SPLIT_ENCODE_MODE])
 
         # 4:4:4- und 4:2:2-Quellen nimmt av1_nvenc nicht an. Nur in diesem Fall
         # wird die Chroma-Unterabtastung umgerechnet, die Bittiefe bleibt.

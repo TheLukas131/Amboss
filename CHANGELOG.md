@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **A file that runs alone uses every encoder unit of the card.** A conversion
+  occupies one NVENC unit; on a card with three, a single film left two of
+  them idle. NVENC can divide each frame into horizontal strips and let the
+  units work on them at once (split frame encoding), and Amboss now asks for
+  that whenever a file has the card to itself — a single file, or any run with
+  one concurrent task. With several files running side by side nothing
+  changes: each already has a unit of its own, and that is the better state,
+  because splitting costs a little compression at the strip boundaries and
+  running in parallel costs nothing.
+
+  For AV1 and H.265; H.264 cannot do it. Requires FFmpeg 7.1 or newer — an
+  older one is detected and simply not given the option. Should the driver or
+  card refuse, the file is converted the ordinary way and the rest of the run
+  does not try again. The decision is made when a file starts and holds for
+  that file: the last one left over while the others finish runs unsplit to
+  the end. Can be switched off under *Advanced*. **Not measured on a real
+  card** — the decision, the command and the fallback are tested, the gain in
+  speed is not.
+
 ### Fixed
 
 - **FFmpeg downloaded by Amboss was never found.** The download put both

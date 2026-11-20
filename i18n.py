@@ -682,6 +682,20 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Später": "Later",
         "Keine Angaben zu dieser Fassung.": "No notes for this version.",
         "... weiteres auf der Projektseite": "... more on the project page",
+
+        # --- Split Frame Encoding ---
+        "Einzelne Datei auf alle Encoder-Einheiten verteilen":
+            "Spread a single file across all encoder units",
+        "Eine Konvertierung belegt sonst nur eine Encoder-Einheit der Grafikkarte. "
+        "Läuft eine Datei allein, wird sie mit dieser Option auf alle Einheiten "
+        "verteilt (Split Frame Encoding) und entsprechend schneller fertig. "
+        "Gilt für AV1 und H.265, kostet etwas Kompression und braucht FFmpeg 7.1 "
+        "oder neuer. Laufen mehrere Dateien gleichzeitig, ändert sich nichts.":
+            "A conversion otherwise occupies just one encoder unit of the graphics "
+            "card. When a file runs alone, this option spreads it across all units "
+            "(split frame encoding), so it finishes correspondingly faster. Applies "
+            "to AV1 and H.265, costs a little compression and needs FFmpeg 7.1 or "
+            "newer. Nothing changes while several files run at once.",
     }
 }
 

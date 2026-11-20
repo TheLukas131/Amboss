@@ -37,6 +37,11 @@ DEFAULTS: Dict[str, Any] = {
     # Kategorie-Ordner ändern.
     "detected_season_pattern": "",
     "normalize_audio": False,
+    # Eine Datei, die allein läuft, auf alle Encoder-Einheiten der Karte
+    # verteilen (siehe ffmpeg_processor.use_split_encode). An, weil sonst bei
+    # einer einzelnen Datei der Grossteil der Karte ungenutzt bleibt -
+    # abschaltbar, weil das Teilen etwas Kompression kostet.
+    "split_frame_encoding": True,
     "rename_enabled": True,
     "delete_source_after_convert": False,
     "delete_local_after_nas_move": False,
