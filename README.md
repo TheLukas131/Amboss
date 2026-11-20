@@ -395,7 +395,7 @@ source files, being predictable is worth more than being convenient.
 | `library_layout.py` | Reads folder conventions from the existing library |
 | `ffmpeg_processor.py` | FFmpeg and FFprobe invocation |
 | `workers.py` | Conversion and upload, off the UI thread |
-| `queue_model.py` | What the queue shows: seasons, filters, sizes and speeds |
+| `queue_model.py` | What the queue shows: seasons, filters, sizes and time remaining |
 | `update_check.py` | Asks GitHub whether a newer version exists |
 | `i18n.py` | Interface translations |
 | `ui/` | User interface |

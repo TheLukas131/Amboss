@@ -14,8 +14,8 @@ lässt.
 mit demselben Stück und brach deshalb um; der Teil, der sich unterscheidet,
 stand am Ende und oft schon in der zweiten Zeile.
 
-*Eine laufende Datei zeigt Zahlen.* Bilder pro Sekunde und Restzeit statt nur
-eines Balkens, und nach dem Abschluss die Größe vorher und nachher.
+*Eine laufende Datei zeigt Zahlen.* Prozent und Restzeit unter dem Balken, und
+nach dem Abschluss die Größe vorher und nachher.
 """
 
 from dataclasses import dataclass, field

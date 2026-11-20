@@ -33,8 +33,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   of a season now sit under a shared row with their combined progress, size and
   target folder; a click opens or closes it. Seasons start closed once the
   queue is longer than twelve files.
-- **A running file shows numbers, a finished one its saving.** Frames per
-  second and time remaining under the bar while it encodes, taken from what
+- **A running file shows numbers, a finished one its saving.** Percentage and
+  time remaining under the bar while it encodes, the latter from the speed
   FFmpeg itself reports; afterwards the size before and after — `2.6 GB →
   655 MB (−75 %)` — in a column of its own.
 

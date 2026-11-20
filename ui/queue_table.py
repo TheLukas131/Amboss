@@ -250,9 +250,15 @@ class QueueTable(TableWidget):
 
     @staticmethod
     def _speed_text(video: VideoFile) -> str:
-        if video.status != FileStatus.VERARBEITET or video.encode_fps <= 0:
+        """Unter dem Balken einer laufenden Datei: Prozent und Restzeit.
+
+        Bewusst keine Bilder pro Sekunde. Die Zahl sagt nur etwas, wenn man
+        weiss, wie viele Bilder der Film hat - und das weiss niemand. Wie weit
+        und wie lange noch beantwortet die Frage, die man an eine laufende
+        Datei tatsächlich hat."""
+        if video.status != FileStatus.VERARBEITET:
             return ""
-        text = f"{video.encode_fps:.0f} fps"
+        text = f"{video.progress} %"
         rest = remaining_seconds(video)
         if rest is not None:
             text += " · " + tr("noch {time}").format(time=format_duration(rest))
@@ -307,7 +313,8 @@ class QueueTable(TableWidget):
 
         cell = self.cellWidget(r, COL_PROGRESS)
         if isinstance(cell, _ProgressCell):
-            laufend = (tr("{count} laufen").format(count=summary.running)
+            laufend = (f"{summary.progress} % · "
+                       + tr("{count} laufen").format(count=summary.running)
                        if summary.running else "")
             cell.show_progress(summary.progress, laufend)
 

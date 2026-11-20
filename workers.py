@@ -40,7 +40,6 @@ from models import (
 
 _CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 _TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.?\d*)")
-_FPS_RE = re.compile(r"fps=\s*(\d+\.?\d*)")
 _SPEED_RE = re.compile(r"speed=\s*(\d+\.?\d*)x")
 
 _PROCESS_SUSPEND_RESUME = 0x0800
@@ -331,11 +330,8 @@ class ConversionWorker(QThread):
 
             self._wait_while_paused(process)
 
-            # Vor der Fortschrittsmeldung: die Oberfläche liest beides, wenn
+            # Vor der Fortschrittsmeldung: die Oberfläche liest das Tempo, wenn
             # sie die Meldung bekommt.
-            fps_match = _FPS_RE.search(line)
-            if fps_match:
-                video.encode_fps = float(fps_match.group(1))
             speed_match = _SPEED_RE.search(line)
             if speed_match:
                 video.encode_speed = float(speed_match.group(1))
