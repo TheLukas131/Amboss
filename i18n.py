@@ -683,6 +683,14 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "Keine Angaben zu dieser Fassung.": "No notes for this version.",
         "... weiteres auf der Projektseite": "... more on the project page",
 
+        # --- Warteschlange: Staffeln, Tempo, Größe ---
+        "Staffel {number}": "Season {number}",
+        "{done}/{total} fertig": "{done}/{total} done",
+        "{count} fehlgeschlagen": "{count} failed",
+        "{count} laufen": "{count} running",
+        "noch {time}": "{time} left",
+        "Klicken, um die Folgen ein- oder auszublenden": "Click to show or hide the episodes",
+
         # --- Split Frame Encoding ---
         "Einzelne Datei auf alle Encoder-Einheiten verteilen":
             "Spread a single file across all encoder units",

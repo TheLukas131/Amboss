@@ -28,15 +28,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   card** — the decision, the command and the fallback are tested, the gain in
   speed is not.
 
-### Fixed
-
-- **FFmpeg downloaded by Amboss was never found.** The download put both
-  programs into `%APPDATA%\Amboss\ffmpeg`, but the lookup only searched `PATH`
-  and the program folder — so the *FFmpeg is missing* notice came straight back
-  after a successful download, on that start and every later one. The folder
-  Amboss itself writes to is now part of the search.
+- **The queue shows a season as one row.** Twenty-four episodes were
+  twenty-four near-identical rows among which the one film got lost. Episodes
+  of a season now sit under a shared row with their combined progress, size and
+  target folder; a click opens or closes it. Seasons start closed once the
+  queue is longer than twelve files.
+- **A running file shows numbers, a finished one its saving.** Frames per
+  second and time remaining under the bar while it encodes, taken from what
+  FFmpeg itself reports; afterwards the size before and after — `2.6 GB →
+  655 MB (−75 %)` — in a column of its own.
 
 ### Changed
+
+- **The target column shows the path relative to the output folder**, on one
+  line. Every row used to begin with the same stretch of path and wrapped
+  because of it, with the part that differs at the end of the second line. The
+  full path is in the tooltip. In a narrow window the column gives way to the
+  file name.
 
 - **A file is read by ffprobe once instead of five times.** Each conversion
   started four ffprobe processes around the encode — subtitle codecs, stream
@@ -61,6 +69,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Scanning resolves each folder once instead of each file.** Whether a file
   lies inside the output folder is decided by its folder; on a network share
   that is one request per season instead of one per episode.
+
+### Fixed
+
+- **FFmpeg downloaded by Amboss was never found.** The download put both
+  programs into `%APPDATA%\Amboss\ffmpeg`, but the lookup only searched `PATH`
+  and the program folder — so the *FFmpeg is missing* notice came straight back
+  after a successful download, on that start and every later one. The folder
+  Amboss itself writes to is now part of the search.
 
 ## [1.3.5] — 2026-08-26
 

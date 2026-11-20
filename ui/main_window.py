@@ -31,6 +31,7 @@ from ffmpeg_processor import FFmpegProcessor
 from gpu_info import detect_gpu
 from library_dispatch import ready_folders
 from run_lock import acquire, release
+from ui.queue_table import QueueTable
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
     NUMERIC_ONLY, category_for_staging_folder, detect_season_pattern, parse_season_convention,
@@ -736,20 +737,11 @@ class MainWindow(FluentWindow):
 
         files_layout.addLayout(toolbar_row)
 
-        self.file_table = TableWidget()
-        self.file_table.setBorderVisible(True)
-        self.file_table.setBorderRadius(8)
-        self.file_table.setColumnCount(6)
-        self.file_table.setHorizontalHeaderLabels([tr("Dateiname"), tr("Typ"), tr("Status"), tr("Fortschritt"), tr("Ziel"), ""])
-        self.file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.file_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.file_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
-        self.file_table.setColumnWidth(5, 44)
-        self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.file_table.verticalHeader().setDefaultSectionSize(40)
-        self.file_table.verticalHeader().setVisible(False)
-        self.file_table.setMinimumHeight(240)
+        # Aufbau und Inhalt der Tabelle: ui/queue_table.py. Eine Zeile ist dort
+        # nicht mehr der Index der Datei - angesprochen wird eine Datei über
+        # file_table.refresh_video(index).
+        self.file_table = QueueTable()
+        self.file_table.remove_requested.connect(self._remove_video)
         files_layout.addWidget(self.file_table)
 
         return card
@@ -2077,20 +2069,7 @@ class MainWindow(FluentWindow):
         self.current_filter = filter_type
         for key, btn in self._filter_buttons.items():
             btn.setChecked(key == filter_type)
-
-        for row in range(self.file_table.rowCount()):
-            show = True
-            if row < len(self.videos):
-                video = self.videos[row]
-                if filter_type == "waiting":
-                    show = video.status == FileStatus.WARTEND
-                elif filter_type == "processing":
-                    show = video.status == FileStatus.VERARBEITET
-                elif filter_type == "done":
-                    show = video.status in (FileStatus.FERTIG, FileStatus.UEBERSPRUNGEN)
-                elif filter_type == "error":
-                    show = video.status == FileStatus.FEHLER
-            self.file_table.setRowHidden(row, not show)
+        self.file_table.set_filter(filter_type)
 
     def clear_file_list(self):
         if self.worker and self.worker.isRunning():
@@ -2104,7 +2083,7 @@ class MainWindow(FluentWindow):
                 return
 
         self.videos.clear()
-        self.file_table.setRowCount(0)
+        self.update_file_table()
         self.details_tree.clear()
         self.total_progress.setValue(0)
         self.update_statistics()
@@ -2309,38 +2288,9 @@ class MainWindow(FluentWindow):
         self.clear_list_btn.setEnabled(bool(self.videos))
 
     def update_file_table(self):
-        colors = theme.semantic_colors()
-        self.file_table.setRowCount(len(self.videos))
-
-        for row, video in enumerate(self.videos):
-            self.file_table.setItem(row, 0, QTableWidgetItem(video.source_path.name))
-            type_item = QTableWidgetItem(tr(video.media_type.value))
-            type_item.setTextAlignment(Qt.AlignCenter)
-            self.file_table.setItem(row, 1, type_item)
-
-            status_item = QTableWidgetItem(tr(video.status.value))
-            status_item.setTextAlignment(Qt.AlignCenter)
-            status_colors = {
-                FileStatus.WARTEND: colors["neutral"], FileStatus.VERARBEITET: colors["accent"],
-                FileStatus.FERTIG: colors["success"], FileStatus.FEHLER: colors["error"],
-                FileStatus.UEBERSPRUNGEN: colors["neutral"], FileStatus.PAUSIERT: colors["warning"],
-            }
-            status_item.setForeground(QColor(status_colors.get(video.status, colors["neutral"])))
-            self.file_table.setItem(row, 2, status_item)
-
-            progress_bar = ProgressBar()
-            progress_bar.setValue(video.progress)
-            self.file_table.setCellWidget(row, 3, progress_bar)
-
-            target_text = str(video.target_path) if video.target_path else "-"
-            self.file_table.setItem(row, 4, QTableWidgetItem(target_text))
-
-            remove_btn = TransparentToolButton(FluentIcon.CLOSE)
-            remove_btn.setToolTip(tr("Aus der Warteschlange entfernen"))
-            remove_btn.setFixedSize(28, 28)
-            remove_btn.clicked.connect(lambda _c=False, v=video: self._remove_video(v))
-            self.file_table.setCellWidget(row, 5, remove_btn)
-
+        """Baut die Warteschlange neu auf - nach Scan, Entfernen, neuen Zielpfaden."""
+        target = self.target_input.text().strip()
+        self.file_table.set_videos(self.videos, Path(target) if target else None)
         self._update_remove_buttons_enabled()
         self.apply_filter(self.current_filter)
 
@@ -2349,10 +2299,7 @@ class MainWindow(FluentWindow):
         Worker adressieren ihre Dateien über den Listenindex, ein Verschieben
         der Indizes mitten im Lauf würde Fortschritt auf die falsche Zeile schreiben."""
         running = bool(self.worker and self.worker.isRunning())
-        for row in range(self.file_table.rowCount()):
-            widget = self.file_table.cellWidget(row, 5)
-            if widget is not None:
-                widget.setEnabled(not running)
+        self.file_table.set_removal_enabled(not running)
 
     def _remove_video(self, video: VideoFile):
         if self.worker and self.worker.isRunning():
@@ -2763,11 +2710,7 @@ class MainWindow(FluentWindow):
         # Datei auf "Wartend", obwohl sie längst dran war. Bei drei parallelen
         # Tasks sah man deshalb zwei in Arbeit statt drei.
         video.status = FileStatus.VERARBEITET
-
-        status_item = self.file_table.item(file_index, 2)
-        if status_item:
-            status_item.setText(tr(FileStatus.VERARBEITET.value))
-            status_item.setForeground(QColor(theme.semantic_colors()["accent"]))
+        self.file_table.refresh_video(file_index)
 
         # Und die Detailseite mitziehen: sie wurde bisher nur beim Abschluss
         # einer Datei neu aufgebaut und zeigte deshalb den Stand vom letzten
@@ -2780,21 +2723,12 @@ class MainWindow(FluentWindow):
         if 0 <= file_index < len(self.videos):
             self.videos[file_index].progress = progress
             self.videos[file_index].status = FileStatus.VERARBEITET
-
-            progress_bar = self.file_table.cellWidget(file_index, 3)
-            if isinstance(progress_bar, ProgressBar):
-                progress_bar.setValue(progress)
-
-            status_item = self.file_table.item(file_index, 2)
-            if status_item:
-                status_item.setText(tr(FileStatus.VERARBEITET.value))
-                status_item.setForeground(QColor(theme.semantic_colors()["accent"]))
+            self.file_table.refresh_video(file_index)
 
         self.update_total_progress()
 
     def on_file_completed(self, file_index: int, success: bool, message: str):
         if 0 <= file_index < len(self.videos):
-            colors = theme.semantic_colors()
             video = self.videos[file_index]
             # UEBERSPRUNGEN nicht überschreiben: der Worker setzt das, wenn die
             # Zieldatei schon existierte. Das meldet er als Erfolg, tr("Fertig") wäre
@@ -2825,17 +2759,7 @@ class MainWindow(FluentWindow):
                 if video.target_metadata is None:
                     video.target_metadata = self.ffmpeg.get_video_metadata(video.target_path)
 
-            progress_bar = self.file_table.cellWidget(file_index, 3)
-            if isinstance(progress_bar, ProgressBar):
-                progress_bar.setValue(video.progress)
-
-            status_item = self.file_table.item(file_index, 2)
-            if status_item:
-                status_item.setText(tr(video.status.value))
-                if video.status == FileStatus.UEBERSPRUNGEN:
-                    status_item.setForeground(QColor(colors["neutral"]))
-                else:
-                    status_item.setForeground(QColor(colors["success"] if success else colors["error"]))
+            self.file_table.refresh_video(file_index)
 
             self.update_details_tree()
             self.update_statistics()

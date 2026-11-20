@@ -263,6 +263,12 @@ class VideoFile:
     target_metadata: Optional[VideoMetadata] = None
     conversion_start_time: Optional[float] = None
     conversion_end_time: Optional[float] = None
+    # Was ffmpeg während des Encodes über sich selbst meldet: Bilder pro
+    # Sekunde und das Tempo im Verhältnis zur Laufzeit des Videos (8.5 heisst:
+    # achteinhalb Sekunden Film je Sekunde). Für die Anzeige in der
+    # Warteschlange; 0, solange nichts gemeldet wurde.
+    encode_fps: float = 0.0
+    encode_speed: float = 0.0
 
     # Abweichung von der globalen Einstellung, nur für diese Datei.
     #
