@@ -701,6 +701,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
 
         # --- Bleibende Meldung im Fenster ---
         "Meldung schließen": "Dismiss",
+        "Fertig - mit Hinweisen": "Finished - with notes",
         "Konvertierung gestoppt": "Conversion stopped",
         "{done} von {total} Dateien konvertiert. {savings}":
             "{done} of {total} files converted. {savings}",

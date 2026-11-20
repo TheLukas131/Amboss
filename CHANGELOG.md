@@ -45,7 +45,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the top of the page, with the time, until it is closed or a new run starts —
   the conversion and the transfer each on a line of their own, on the
   conversion page and in the library alike. A stopped run says *stopped*
-  rather than *finished*.
+  rather than *finished*. The same result also comes up as a dialog in front
+  of the window, once everything is through — after the transfer if one was
+  selected, not after the conversion before it — and waits there to be
+  confirmed. It is left out where another dialog already says it: the
+  shutdown countdown, and the failure report after a run without transfer.
 - **The filters count.** *Waiting 4*, *Failed 1* — how many files each would
   show, without having to click through them.
 

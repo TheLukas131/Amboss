@@ -223,6 +223,12 @@ dialoge = [
     ("Medientyp-Bestaetigung",
      lambda: __import__("ui.media_type_review_dialog", fromlist=["x"])
              .MediaTypeReviewDialog(videos, fenster)),
+    ("Ergebnis am Ende des Laufs",
+     lambda: __import__("ui.result_dialog", fromlist=["x"]).ResultDialog(
+         [__import__("ui.result_banner", fromlist=["x"]).make_entry(
+              "Konvertierung abgeschlossen", "3 Datei(en) fertig konvertiert."),
+          __import__("ui.result_banner", fromlist=["x"]).make_entry(
+              "Verschieben mit Fehlern", "1 verschoben, 1 fehlgeschlagen.", True)], fenster)),
     ("Fehlerbericht",
      lambda: __import__("ui.failure_report_dialog", fromlist=["x"])
              .FailureReportDialog(videos[:1], len(videos) - 1, fenster)),

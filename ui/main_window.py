@@ -34,6 +34,7 @@ from queue_model import relative_target, size_change, status_counts
 from ui.details_panel import DetailsPanel
 from ui.queue_table import QueueTable
 from ui.result_banner import MAX_ENTRIES, ResultBanner, make_entry
+from ui.result_dialog import ResultDialog
 from gpu_monitor import GpuMonitorThread
 from library_layout import (
     NUMERIC_ONLY, category_for_staging_folder, detect_season_pattern, parse_season_convention,
@@ -1298,6 +1299,17 @@ class MainWindow(FluentWindow):
         self._refresh_result_banners()
         self.notify_system(title, message, warning)
 
+    def _show_result_popup(self):
+        """Stellt das Ergebnis als Meldung vor das Fenster.
+
+        Wird erst gerufen, wenn nichts mehr folgt: nach dem Verschieben, wenn
+        eines eingestellt war, sonst nach der Konvertierung. Nicht, wenn danach
+        heruntergefahren wird - dann steht der Countdown da - und nicht nach
+        einem Lauf mit gescheiterten Dateien ohne Verschieben, denn dort ist
+        der Fehlerbericht bereits diese Meldung."""
+        if self._results:
+            ResultDialog(self._results, self).exec()
+
     def _clear_results(self):
         self._results = []
         self._refresh_result_banners()
@@ -1311,9 +1323,6 @@ class MainWindow(FluentWindow):
 
     def _toast_success(self, title: str, content: str):
         InfoBar.success(title, content, duration=4000, position=InfoBarPosition.TOP, parent=self)
-
-    def _toast_warning(self, title: str, content: str):
-        InfoBar.warning(title, content, duration=6000, position=InfoBarPosition.TOP, parent=self)
 
     # =========================================================================
     # Windows-Benachrichtigungen (Infobereich)
@@ -1787,17 +1796,17 @@ class MainWindow(FluentWindow):
                 .format(done=completed, failed=failed),
                 warning=True,
             )
-            self._toast_warning(tr("Upload mit Fehlern"), tr("{count} Medium/Medien konnten nicht verschoben werden.").format(count=failed))
         else:
             self.announce(
                 tr("Verschieben abgeschlossen"),
                 tr("{count} Medium/Medien in die Mediathek verschoben.").format(count=completed),
             )
-            self._toast_success(tr("Upload abgeschlossen"), tr("{count} Medium/Medien erfolgreich verschoben.").format(count=completed))
 
         if self._shutdown_after_nas_upload:
             self._shutdown_after_nas_upload = False
             ShutdownCountdownDialog(self).exec_()
+        else:
+            self._show_result_popup()
 
     def _trigger_auto_nas_upload(self):
         """Wird nach automatisch abgeschlossener Konvertierung aufgerufen, wenn
@@ -1859,11 +1868,6 @@ class MainWindow(FluentWindow):
                     tr("{count} Medium/Medien in die Mediathek verschoben.")
                     .format(count=erledigt),
                 )
-                self._toast_success(
-                    tr("Upload abgeschlossen"),
-                    tr("{count} Medium/Medien erfolgreich verschoben.")
-                    .format(count=erledigt),
-                )
 
             # Ohne diesen Zweig bliebe ein eingestelltes Herunterfahren aus:
             # es haengt sonst am Abschluss des Uploads, den es hier nicht gibt,
@@ -1871,6 +1875,8 @@ class MainWindow(FluentWindow):
             if self._shutdown_after_nas_upload:
                 self._shutdown_after_nas_upload = False
                 ShutdownCountdownDialog(self).exec_()
+            else:
+                self._show_result_popup()
             return
 
         self.log(f"Automatic transfer started after conversion ({len(offen)} items)...")
@@ -3126,7 +3132,6 @@ class MainWindow(FluentWindow):
                     tr("{count} Datei(en) fertig konvertiert. {savings}")
                     .format(count=completed, savings=saving_text).strip(),
                 )
-                self._toast_success(tr("Konvertierung abgeschlossen"), tr("{count} Datei(en) erfolgreich konvertiert.").format(count=completed))
 
         self._check_for_truncated_name_duplicates()
 
@@ -3136,9 +3141,15 @@ class MainWindow(FluentWindow):
 
         if self._post_nas_enabled() and not was_stopped and completed > 0:
             self._shutdown_after_nas_upload = should_shutdown
+            if failed == 0:
+                # Nur ein kurzer Hinweis: die eigentliche Meldung kommt, wenn
+                # auch das Verschieben durch ist.
+                self._toast_success(tr("Konvertierung abgeschlossen"), tr("{count} Datei(en) erfolgreich konvertiert.").format(count=completed))
             self._trigger_auto_nas_upload()
         elif should_shutdown:
             ShutdownCountdownDialog(self).exec_()
+        elif failed == 0:
+            self._show_result_popup()
 
     def _check_for_truncated_name_duplicates(self):
         """Läuft nach jeder abgeschlossenen Konvertierung; blockiert nie die Konvertierung selbst."""
